@@ -2,7 +2,20 @@
 
 Base fixa: `14da4482a4668928bad43bb67ef12f96b9c9d972`. A referência validada contém 19 arquivos modificados. O estado posterior modifica também `renderer_vulkan.cpp`, totalizando 20. Os patches completos, e não apenas este resumo, registram as diferenças exatas.
 
-A release do APK retorna à referência gráfica sem AppletRing e acrescenta quatro arquivos: `src/android/app/build.gradle.kts` remove o sufixo visível Debug Release e desativa a depuração Android/JNI; `src/common/settings.h` define 16392 como valor padrão das flags; `CMakeLists.txt` remapeia caminhos locais do código e NDK na compilação Android com `-ffile-prefix-map`. `externals/CMakeLists.txt` preserva esse remapeamento no cubeb, que limpa as opções herdadas. São 23 arquivos modificados na release. Consulte `release-mhrise-full.patch` e [RELEASE.md](RELEASE.md). Não houve novo teste manual em missão desse arquivo binário.
+A release atual preserva as correções gráficas sem AppletRing e acrescenta a opção 19,5:9. São **31 arquivos modificados** sobre o commit base. O patch `release-mhrise-full.patch` corresponde à árvore completa atual; os patches anteriores registram estados históricos.
+
+## Proporção 19,5:9 e instalação separada
+
+O delta `screen-19.5-9.patch` modifica nove arquivos sobre as fontes da release anterior:
+
+- `src/common/settings_enums.h`: acrescenta `R19_5_9` com valor 5; preserva os valores 0–4 já usados nas configurações.
+- `src/core/frontend/framebuffer_layout.cpp`: calcula a área de apresentação usando 9/19,5.
+- `src/android/app/src/main/res/values/arrays.xml` e `strings.xml`: acrescentam a opção 19.5:9 ao menu.
+- `EmulationFragment.kt` e `EmulationActivity.kt`: usam `Rational(39, 18)` nos layouts Android e no modo picture-in-picture.
+- `src/qt_common/config/shared_translation.cpp` e `uisettings.cpp`: mantêm a enumeração e os cálculos de largura consistentes no frontend Qt; a build desktop não foi testada nesta etapa.
+- `src/android/app/build.gradle.kts`: `-PedenStandaloneScreen=true` seleciona o pacote independente `.mhrise.screen` e a versão visível `-mhrise-screen`. Sem a propriedade, mantém a identidade anterior. Nome visível Eden e depuração Android/JNI desativada.
+
+As alterações de proteção da release anterior foram mantidas: `-ffile-prefix-map` no CMake principal e no cubeb, relatório de dependências higienizado e valor padrão 16392 para as duas correções. Não foram acrescentadas permissões Android na atualização de proporção. A opção altera a apresentação final, sem modificar o campo de visão ou a resolução interna do jogo. Os testes foram realizados no Galaxy S25; MH Rise foi aprovado pelo jogador. O piscar dos insetos continua sendo uma limitação conhecida.
 
 ## Correções ativas na referência
 

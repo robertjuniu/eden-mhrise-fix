@@ -33,10 +33,19 @@ index cb1dece..7f5917e 100644
                  $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-const-int-float-conversion>
                  $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 3ae6d73..d36e755 100644
+index 3ae6d73..f316d8b 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
-@@ -150,22 +150,21 @@ android {
+@@ -40,6 +40,8 @@ android {
+ 
+     val isNightly =
+         providers.gradleProperty("nightly").orNull?.toBooleanStrictOrNull() ?: false
++    val standaloneScreen =
++        providers.gradleProperty("edenStandaloneScreen").orNull?.toBooleanStrictOrNull() ?: false
+ 
+     buildFeatures {
+         viewBinding = true
+@@ -150,22 +152,21 @@ android {
              )
          }
  
@@ -57,13 +66,70 @@ index 3ae6d73..d36e755 100644
 +            manifestPlaceholders += mapOf("appNameSuffix" to "")
  
 -            versionNameSuffix = "-relWithDebInfo"
-+            versionNameSuffix = "-mhrise-fix"
-             applicationIdSuffix = ".relWithDebInfo"
+-            applicationIdSuffix = ".relWithDebInfo"
 -            isJniDebuggable = true
++            versionNameSuffix = if (standaloneScreen) "-mhrise-screen" else "-mhrise-fix"
++            applicationIdSuffix = if (standaloneScreen) ".mhrise.screen" else ".relWithDebInfo"
 +            isJniDebuggable = false
          }
  
          // Signed by debug key disallowing distribution on Play Store.
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/activities/EmulationActivity.kt b/src/android/app/src/main/java/org/yuzu/yuzu_emu/activities/EmulationActivity.kt
+index aaabcc9..1ba1d8c 100644
+--- a/src/android/app/src/main/java/org/yuzu/yuzu_emu/activities/EmulationActivity.kt
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/activities/EmulationActivity.kt
+@@ -582,6 +582,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
+             1 -> Rational(4, 3)
+             2 -> Rational(21, 9)
+             3 -> Rational(16, 10)
++            5 -> Rational(39, 18)
+             else -> null // Best fit
+         }
+         return this.apply { aspectRatio?.let { setAspectRatio(it) } }
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/EmulationFragment.kt b/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/EmulationFragment.kt
+index 3323b3c..a48160a 100644
+--- a/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/EmulationFragment.kt
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/EmulationFragment.kt
+@@ -1835,6 +1835,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
+             1 -> Rational(4, 3)
+             2 -> Rational(21, 9)
+             3 -> Rational(16, 10)
++            5 -> Rational(39, 18)
+             else -> null // Best fit
+         }
+         when (verticalAlignment) {
+diff --git a/src/android/app/src/main/res/values/arrays.xml b/src/android/app/src/main/res/values/arrays.xml
+index be367a2..c804a9a 100644
+--- a/src/android/app/src/main/res/values/arrays.xml
++++ b/src/android/app/src/main/res/values/arrays.xml
+@@ -253,6 +253,7 @@
+         <item>@string/ratio_force_twenty_one_nine</item>
+         <item>@string/ratio_force_sixteen_ten</item>
+         <item>@string/ratio_stretch</item>
++        <item>@string/ratio_force_nineteen_half_nine</item>
+     </string-array>
+ 
+     <integer-array name="rendererAspectRatioValues">
+@@ -261,6 +262,7 @@
+         <item>2</item>
+         <item>3</item>
+         <item>4</item>
++        <item>5</item>
+     </integer-array>
+ 
+     <string-array name="rendererScalingFilterNames">
+diff --git a/src/android/app/src/main/res/values/strings.xml b/src/android/app/src/main/res/values/strings.xml
+index 703a91f..c1dec4d 100644
+--- a/src/android/app/src/main/res/values/strings.xml
++++ b/src/android/app/src/main/res/values/strings.xml
+@@ -1201,6 +1201,7 @@
+     <string name="ratio_force_four_three" translatable="false">4:3</string>
+     <string name="ratio_force_twenty_one_nine" translatable="false">21:9</string>
+     <string name="ratio_force_sixteen_ten" translatable="false">16:10</string>
++    <string name="ratio_force_nineteen_half_nine" translatable="false">19.5:9</string>
+     <string name="ratio_stretch">Stretch to window</string>
+ 
+     <!-- CPU Backend -->
 diff --git a/src/common/settings.h b/src/common/settings.h
 index 2a4bf3e..e302a8f 100644
 --- a/src/common/settings.h
@@ -77,6 +143,57 @@ index 2a4bf3e..e302a8f 100644
                                             0,
                                             65535,
                                             "debug_knobs",
+diff --git a/src/common/settings_enums.h b/src/common/settings_enums.h
+index eaf3ec5..60b8c33 100644
+--- a/src/common/settings_enums.h
++++ b/src/common/settings_enums.h
+@@ -148,7 +148,7 @@ ENUM(NvdecEmulation, Off, Cpu, Gpu);
+ ENUM(ResolutionSetup, Res1_4X, Res1_2X, Res3_4X, Res1X, Res5_4X, Res3_2X, Res2X, Res3X, Res4X, Res5X, Res6X, Res7X, Res8X);
+ ENUM(ScalingFilter, NearestNeighbor, Bilinear, Bicubic, Gaussian, Lanczos, ScaleForce, Fsr, Area, ZeroTangent, BSpline, Mitchell, Spline1, Mmpx, Sgsr, SgsrEdge);
+ ENUM(AntiAliasing, None, Fxaa, Smaa);
+-ENUM(AspectRatio, R16_9, R4_3, R21_9, R16_10, Stretch);
++ENUM(AspectRatio, R16_9, R4_3, R21_9, R16_10, Stretch, R19_5_9);
+ ENUM(ConsoleMode, Handheld, Docked);
+ ENUM(AppletMode, HLE, LLE, Disabled);
+ ENUM(SpirvOptimizeMode, Never, OnLoad, Always);
+diff --git a/src/core/frontend/framebuffer_layout.cpp b/src/core/frontend/framebuffer_layout.cpp
+index cd7b5b3..64cf9f6 100644
+--- a/src/core/frontend/framebuffer_layout.cpp
++++ b/src/core/frontend/framebuffer_layout.cpp
+@@ -60,6 +60,8 @@ float EmulationAspectRatio(Settings::AspectRatio aspect, float window_aspect_rat
+         return 10.0f / 16.0f;
+     case Settings::AspectRatio::Stretch:
+         return window_aspect_ratio;
++    case Settings::AspectRatio::R19_5_9:
++        return 9.0f / 19.5f;
+     default:
+         return float(ScreenUndocked::Height) / ScreenUndocked::Width;
+     }
+diff --git a/src/qt_common/config/shared_translation.cpp b/src/qt_common/config/shared_translation.cpp
+index 964a4cd..312a29b 100644
+--- a/src/qt_common/config/shared_translation.cpp
++++ b/src/qt_common/config/shared_translation.cpp
+@@ -514,6 +514,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
+                               PAIR(AspectRatio, R21_9, tr("Force 21:9")),
+                               PAIR(AspectRatio, R16_10, tr("Force 16:10")),
+                               PAIR(AspectRatio, Stretch, tr("Stretch to Window")),
++                              PAIR(AspectRatio, R19_5_9, tr("Force 19.5:9")),
+                           }});
+     translations->insert({Settings::EnumMetadata<Settings::AnisotropyMode>::Index(),
+                           {
+diff --git a/src/qt_common/config/uisettings.cpp b/src/qt_common/config/uisettings.cpp
+index f4f5688..21b7da3 100644
+--- a/src/qt_common/config/uisettings.cpp
++++ b/src/qt_common/config/uisettings.cpp
+@@ -92,6 +92,8 @@ u32 CalculateWidth(u32 height, Settings::AspectRatio ratio) {
+         return height * 21 / 9;
+     case Settings::AspectRatio::R16_10:
+         return height * 16 / 10;
++    case Settings::AspectRatio::R19_5_9:
++        return height * 39 / 18;
+     case Settings::AspectRatio::R16_9:
+     case Settings::AspectRatio::Stretch:
+         // TODO: Move this function wherever appropriate to implement Stretched aspect
 diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
 index b562e82..98d4796 100644
 --- a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp

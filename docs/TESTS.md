@@ -31,7 +31,7 @@ Testes manuais em MH Rise/Sunbreak, Galaxy S25 SM-S931B, Android 17, Adreno 830.
 | A/B ao vivo de FiveWordSync | Mesma cena/câmera: on 27,47/27,79 FPS; off 29,82/30,01 FPS. Captura on mostra Wirebug; off não. Não mede frequência de flicker por si só. |
 | PendingWrites | Proteção acionou; insetos continuaram ausentes, desempenho melhor. |
 | Diagnóstico de parâmetros | Marca dirty presente em e3a/e42; estimativa de índices zero em amostras. Instância CPU zero não significa instância GPU zero. |
-| **IndexBound + sampler, Low/DMA/fence padrão** | **Usuário confirmou insetos presentes sem piscar e fluidez melhor. Referência aprovada.** |
+| **IndexBound + sampler, Low/DMA/fence padrão** | **Relato inicial: insetos presentes sem piscar e fluidez melhor. Em avaliação posterior, o jogador confirmou piscar residual com menor frequência; não está completamente corrigido.** |
 | AppletRing posterior | Usuário percebeu desempenho semelhante. Sem ganho confirmado; aparelho estava termicamente limitado durante a investigação posterior. |
 | Resolução 0,75× / shaders assíncronos | Sugeridos como testes posteriores; **não aplicados nem validados** nesta sessão. |
 
@@ -55,3 +55,14 @@ Perfis simpleperf com `trace-offcpu` incluem esperas e não indicam diretamente 
 Após uso prolongado, HAL indicou SKIN perto de 45 °C e Thermal Status 3 (severe), com bateria próxima de 44–45 °C. Isso sustenta investigar temperatura, mas não prova que toda queda tenha essa causa. Nenhuma proteção térmica foi desativada e nenhum root foi feito.
 
 Não foi demonstrado ganho sustentado de FPS em todas as missões, estabilidade por horas, compatibilidade OpenGL ou equivalência entre drivers. A validação final é o relato do jogador na cena testada, com evidência de ativação da correção.
+
+
+## APK atual com 19,5:9 — 17/10/2026
+
+Build Android completa concluída em 22 min 58 s, incluindo lintVital. APK SHA-256 `953693bc2cf1f75694a76ae0526ea7d8b6a3d8c772ebdd757d3c3d0c9d8fc127`, versionCode 34066836, pacote `dev.eden.eden_emulator.mhrise.screen`, nome Eden e versão `14da448-mhrise-screen`.
+
+Instalação separada verificada no Galaxy S25, preservando a versão anterior e os sete arquivos de cache de shaders, conferidos por hash antes/depois. A preparação local copiou dados apenas entre as instalações no telefone; nenhum desses dados acompanha o APK ou os pacotes publicados.
+
+MH Rise iniciou com Turnip V37, GPU baixa e flags 16392. A captura do menu de missões ocupou 2340 × 1080; o contador mostrou 29,9 FPS naquele instante, sem constituir medição sustentada. O jogador respondeu que a proporção estava funcionando perfeitamente. Não foram testados outros jogos, outros aparelhos ou a build Qt. Não houve nova investigação que demonstrasse a eliminação do piscar residual.
+
+As verificações de assinatura, depuração, permissões e privacidade da distribuição estão descritas em [RELEASE.md](RELEASE.md). Não foi realizada auditoria completa de segurança.

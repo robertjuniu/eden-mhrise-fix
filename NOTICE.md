@@ -1,6 +1,6 @@
 # Aviso de modificação
 
-Esta distribuição independente reúne patches de código do Eden modificados em **14–17 de outubro de 2026**, com o objetivo específico de investigar e corrigir problemas gráficos de Monster Hunter Rise/Sunbreak no Galaxy S25.
+Esta distribuição independente reúne patches de código do Eden modificados em **14–17 de outubro de 2026**, com o objetivo de investigar e corrigir problemas gráficos de Monster Hunter Rise/Sunbreak, além de acrescentar a opção geral de proporção 19,5:9. Os testes foram realizados no Galaxy S25.
 
 Origem: Eden Emulator Project e respectivos contribuidores, incluindo código do yuzu Emulator Project e dependências de terceiros. Base: `14da4482a4668928bad43bb67ef12f96b9c9d972`.
 

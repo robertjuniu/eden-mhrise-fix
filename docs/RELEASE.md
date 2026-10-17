@@ -2,50 +2,43 @@
 
 [Release e downloads](https://github.com/robertjuniu/eden-mhrise-fix/releases/tag/mhrise-fix-2026.10.17)
 
-Esta é uma distribuição **não oficial**, específica para a investigação de Monster Hunter Rise/Sunbreak. Eden é software do Eden Emulator Project e respectivos contribuidores, não do mantenedor deste fix. Créditos, GPL-3.0-or-later e declaração de assistência substancial de IA permanecem em README, CREDITS e NOTICE.
+Distribuição não oficial com correções gráficas investigadas para Monster Hunter Rise/Sunbreak e uma opção geral de proporção 19,5:9. Os testes foram realizados no Galaxy S25. Eden pertence ao Eden Emulator Project e aos respectivos contribuidores; créditos, GPL-3.0-or-later e avisos de assistência de IA permanecem nos arquivos do projeto.
 
-## APK
+## APK e instalação
 
-- Arquivo: `Eden_MHRISEFIX.apk`.
-- Nome visível: **Eden**, sem “Debug Release”.
-- Arquitetura: ARM64; Android 13/API 33 ou superior.
-- Pacote: `dev.eden.eden_emulator.relWithDebInfo`.
-- Versão: `14da448-mhrise-fix`; versionCode `34066238`.
-- **Não depurável:** depuração Android e JNI desativadas. O nome interno da tarefa permanece `MainlineRelWithDebInfo`; pacote e assinatura foram preservados para atualização compatível sobre a build anterior. A assinatura continua sendo a de desenvolvimento, e a distribuição continua não oficial.
-- SHA-256: `959a1782d106d265b64fabd0eedb2a50cf0f6f2742a8f236161aa4d95190b12d`.
+- Arquivo: `Eden_MHRISEFIX.apk`; nome visível **Eden**.
+- ARM64, Android 13/API 33 ou superior.
+- Pacote: `dev.eden.eden_emulator.mhrise.screen`.
+- Versão: `14da448-mhrise-screen`; versionCode `34066836`.
+- Depuração Android e JNI desativadas; assinatura anterior preservada.
+- SHA-256: `953693bc2cf1f75694a76ae0526ea7d8b6a3d8c772ebdd757d3c3d0c9d8fc127`.
 
-As duas correções da referência validada foram mantidas: máscara constante do sampler e limite de índices indiretos. O experimento posterior AppletRing não está nesta release. O valor padrão de `debug_knobs` é 16392, habilitando os fixes em instalações novas; configurações antigas explícitas podem prevalecer. Use GPU baixa, DMA/fences padrão e modo portátil como na referência. Caminhos locais do código e do NDK são remapeados na compilação Android com `-ffile-prefix-map`; o relatório de dependências também foi higienizado.
+**Mudança de pacote:** este APK instala ao lado das versões antigas `.relWithDebInfo`/nightly; não as atualiza nem migra seus dados automaticamente. Configure a nova instalação e, se desejar, use os recursos de exportação/importação do aplicativo com uma cópia dos seus dados. Mantenha a instalação antiga e seus shaders até conferir a nova. Jogos, firmware, keys de console e saves não são distribuídos aqui.
 
-A referência anterior foi testada no mapa pelo jogador, que confirmou insetos presentes sem piscar, brilho corrigido e melhor fluidez. Esta recompilação desativa a depuração Android/JNI, remapeia caminhos locais e passou no build, conferência do manifest, verificação de assinatura e busca limitada por identificadores particulares, mas **não recebeu um novo teste manual em missão**. O hash anterior 33e52e... identifica outro arquivo, preservado no histórico. Não há garantia para outros jogos/aparelhos nem promessa de FPS sustentado.
+Em **Configurações gráficas → Proporção de tela**, escolha **19.5:9** globalmente ou por jogo. O padrão 16:9 continua disponível. A opção redimensiona a imagem final, sem ampliar o campo de visão nativo; interfaces e vídeos podem ter resultados diferentes, incluindo barras internas. A opção pode ser usada em outros jogos e aparelhos, mas apenas MH Rise foi testado nesta etapa.
+
+As correções de sampler e índices indiretos permanecem ativas por padrão (`debug_knobs=16392`). A referência usa GPU baixa, DMA/fences padrão e modo portátil; configurações antigas explícitas podem prevalecer. AppletRing não está incluído. Os insetos ainda podem piscar, com menor frequência conforme relato do jogador; não houve correção completa desse problema.
+
+## Testes e verificações
+
+O jogador confirmou o funcionamento de 19,5:9 no MH Rise. Uma captura do menu de missões preencheu 2340 × 1080. A compilação completa, lintVital, assinatura e manifest passaram nas verificações. Nome e versão visíveis não contêm Debug/relWithDebInfo. Isso não representa teste de todos os jogos ou garantia de FPS sustentado.
+
+A revisão limitada da alteração de proporção não encontrou novas permissões Android nem novos componentes exportados. Foi repetida a busca nos artefatos e nos arquivos públicos por identificadores particulares conhecidos, caminhos locais e arquivos de chaves. Caminhos de compilação são remapeados com `-ffile-prefix-map`. Os resultados e hashes correspondem aos arquivos desta release; isso não equivale a auditoria completa, pentest ou garantia de ausência de vulnerabilidades. Bibliotecas e dependências existentes do Eden continuam fazendo parte da distribuição.
 
 ## Fontes correspondentes e licenças
 
-Baixe os três pacotes da mesma release:
+- `Eden_MHRISEFIX-source.zip`: árvore completa já modificada, base `14da4482a4668928bad43bb67ef12f96b9c9d972`, scripts, documentação, licenças e avisos upstream.
+- `Eden_MHRISEFIX-native-dependencies.zip`: entradas CPM e fontes/scripts/licenças dos fornecedores nativos, incluindo patch e proveniência FFmpeg.
+- `Eden_MHRISEFIX-android-dependencies.zip`: fontes/POMs Maven, grafo de runtime e manifest de downloads. As quatro BOMs contêm metadados, sem código Java/Kotlin próprio.
 
-1. `Eden_MHRISEFIX-source.zip`: árvore completa do Eden no commit base `14da4482a4668928bad43bb67ef12f96b9c9d972`, já modificada com `patches/release-mhrise-full.patch`, incluindo scripts de build, documentação e avisos upstream.
-2. `Eden_MHRISEFIX-native-dependencies.zip`: entradas CPM da compilação, fontes de dependências, arquivos-fonte dos fornecedores de bibliotecas pré-compiladas e seus scripts/licenças. Inclui o patch FFmpeg e sua proveniência.
-3. `Eden_MHRISEFIX-android-dependencies.zip`: sources.jar e POMs das dependências Maven de runtime, grafo de dependências e manifest de downloads. As quatro BOMs são metadados, sem código Java/Kotlin próprio.
-
-Os arquivos nativos originais em cache são incluídos como entradas de reprodução, **junto das suas fontes**; não confunda as bibliotecas `.a` com código-fonte. Os arquivos de fonte de fornecedores ficam em `third_party/source_archives`; as bibliotecas CPM construídas a partir de fonte ficam em `eden/.cache/cpm`. Os avisos/licenças específicos dessas dependências permanecem aplicáveis e acompanham seus diretórios/arquivos.
-
-`SHA256SUMS.txt` e `release-manifest.json` identificam os artefatos. A distribuição não depende apenas do master atual do upstream nem apenas dos dois patches isolados.
+Os pacotes de dependências não mudaram nesta atualização. Bibliotecas pré-compiladas são acompanhadas de suas fontes e scripts; avisos/licenças dos fornecedores permanecem aplicáveis. Confira `SHA256SUMS.txt` e `release-manifest.json`.
 
 ## Reconstrução
 
-Extraia os pacotes source e native-dependencies no mesmo diretório; a árvore resultante é `eden/`. Ela já contém as alterações; **não reaplique o patch**. Consulte `BUILD.md` e o arquivo `third_party/BUILD-SOURCES.md` dos pacotes de dependências.
+Extraia source e native-dependencies no mesmo diretório; a árvore `eden/` já está modificada, então não reaplique patches. Use Java 21, Android SDK 36, NDK 28.2.13676358 e CMake 3.31.6. Em `src/android`, execute `:app:assembleMainlineRelWithDebInfo -PedenStandaloneScreen=true` pelo wrapper Gradle. O nome interno da tarefa não torna o APK depurável.
 
-Instale Java 21, Android SDK 36, NDK 28.2.13676358 e CMake 3.31.6. Use os scripts/wrapper da árvore. Se não houver `src/android/app/debug.keystore`, gere sua própria chave de desenvolvimento, sem publicar a chave:
-
-```sh
-keytool -genkeypair -keystore src/android/app/debug.keystore -alias androiddebugkey -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
-```
-
-Depois execute a tarefa `:app:assembleMainlineRelWithDebInfo` em `src/android` conforme BUILD.md. O Gradle obtém ferramentas e dependências de seus repositórios oficiais; os sources.jar/POMs fornecidos permitem consultar/modificar essas dependências. SDK/NDK/JDK/Gradle são ferramentas padrão externas, não estão incorporados como toolchains nos pacotes.
-
-Ao recompilar fornecedores nativos, use os scripts e revisões documentados nos arquivos; o patch `ffmpeg-steamdeck.patch` incluído pode substituir a URL raw externa nos scripts FFmpeg. O identificador embutido `adbaa35` é o commit `adbaa353e295c5039b0f246ce81047486f597386` dos scripts `crueter-ci/FFmpeg`; o código FFmpeg é `946fcce07b6dcd0331c8cc609192aeff5e1924f8`. Essa correspondência foi conferida, e o patch foi validado com `git apply --check`.
-
-Não se promete reprodução byte a byte: metadados e a sua assinatura mudam o hash. Instalar sobre outro APK exige pacote/assinatura compatíveis. Preserve backups; não desinstale uma instalação com dados importantes sem protegê-los.
+Consulte [BUILD.md](BUILD.md) e `third_party/BUILD-SOURCES.md` nos pacotes de dependências. Gere sua própria chave de desenvolvimento se necessário; nenhuma chave particular de assinatura é distribuída. Ferramentas padrão SDK/NDK/JDK/Gradle são externas. Não se promete reprodução binária byte a byte: assinatura e metadados mudam o hash.
 
 ## Saves Steam → Switch
 
-Veja [SAVE-CONVERSION.md](SAVE-CONVERSION.md), com recomendação do conversor hashcade e créditos ao autor original Jing Haihan e à pesquisa kvasszn. No caso relatado, a conversão funcionou mantendo apenas o slot 1 numa cópia dos saves; não é regra universal nem instrução para apagar o save original.
+Veja [SAVE-CONVERSION.md](SAVE-CONVERSION.md), com recomendação de hashcade/mhrise-save-converter e créditos ao autor original Jing Haihan e à pesquisa kvasszn. O relato do slot 1 descreve um caso em uma cópia dos saves, não uma regra universal para apagar dados originais.
