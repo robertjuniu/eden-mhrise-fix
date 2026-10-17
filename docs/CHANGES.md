@@ -2,7 +2,7 @@
 
 Base fixa: `14da4482a4668928bad43bb67ef12f96b9c9d972`. A referência validada contém 19 arquivos modificados. O estado posterior modifica também `renderer_vulkan.cpp`, totalizando 20. Os patches completos, e não apenas este resumo, registram as diferenças exatas.
 
-A release do APK retorna à referência gráfica sem AppletRing e acrescenta dois arquivos: `src/android/app/build.gradle.kts` remove o sufixo visível Debug Release; `src/common/settings.h` define 16392 como valor padrão das flags. São 21 arquivos modificados na release. Consulte `release-mhrise-full.patch` e [RELEASE.md](RELEASE.md). A recompilação passou; não houve novo teste manual em missão desse arquivo binário.
+A release do APK retorna à referência gráfica sem AppletRing e acrescenta quatro arquivos: `src/android/app/build.gradle.kts` remove o sufixo visível Debug Release e desativa a depuração Android/JNI; `src/common/settings.h` define 16392 como valor padrão das flags; `CMakeLists.txt` remapeia caminhos locais do código e NDK na compilação Android com `-ffile-prefix-map`. `externals/CMakeLists.txt` preserva esse remapeamento no cubeb, que limpa as opções herdadas. São 23 arquivos modificados na release. Consulte `release-mhrise-full.patch` e [RELEASE.md](RELEASE.md). Não houve novo teste manual em missão desse arquivo binário.
 
 ## Correções ativas na referência
 

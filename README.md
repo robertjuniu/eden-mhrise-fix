@@ -48,7 +48,7 @@ O Eden declara licença **GNU GPL versão 3 ou posterior**. Os patches derivados
 
 Esta investigação, suas alterações de código e esta documentação tiveram assistência substancial de **OpenAI Codex**. O jogador executou e avaliou testes visuais no próprio aparelho; isso não equivale a revisão humana completa de cada linha. Não alegamos revisão ou aceitação pelo upstream. Nenhuma assinatura de desenvolvedor humano foi criada automaticamente.
 
-O repositório contém documentação e patches; a release experimental fornece o APK **junto de três pacotes de fontes/dependências**, scripts, licenças e hashes. Não são distribuídos jogos, firmware, chaves de console, saves ou dumps de shaders do jogo. O hash da tabela identifica o artefato originalmente testado; o APK recompilado com nome Eden e defaults ativos tem hash `16324ccafdb370c1f795299444de0cd87201cae66d3432ae2c874ab1266b349b`. As diferenças e validações estão em [RELEASE.md](docs/RELEASE.md).
+O repositório contém documentação e patches; a release experimental fornece o APK **junto de três pacotes de fontes/dependências**, scripts, licenças e hashes. Não são distribuídos jogos, firmware, chaves de console, saves ou dumps de shaders do jogo. O hash da tabela identifica o artefato originalmente testado; o APK recompilado com nome Eden e defaults ativos tem hash `959a1782d106d265b64fabd0eedb2a50cf0f6f2742a8f236161aa4d95190b12d`. As diferenças e validações estão em [RELEASE.md](docs/RELEASE.md).
 
 ## Desempenho
 

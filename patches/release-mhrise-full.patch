@@ -1,16 +1,69 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f647204..ebcb12d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -6,6 +6,13 @@ cmake_minimum_required(VERSION 3.31)
+ set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "macOS deployment target")
+ project(yuzu)
+ 
++if (ANDROID AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
++    add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
++    if (ANDROID_NDK)
++        add_compile_options("-ffile-prefix-map=${ANDROID_NDK}=./android-ndk")
++    endif()
++endif()
++
+ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules")
+ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/find")
+ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modules")
+diff --git a/externals/CMakeLists.txt b/externals/CMakeLists.txt
+index cb1dece..7f5917e 100644
+--- a/externals/CMakeLists.txt
++++ b/externals/CMakeLists.txt
+@@ -121,6 +121,11 @@ if(ENABLE_CUBEB)
+                 target_compile_options(speex PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-sign-compare>)
+             endif()
+             set_target_properties(cubeb PROPERTIES COMPILE_OPTIONS "")
++            if (ANDROID AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
++                target_compile_options(cubeb PRIVATE
++                    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
++                    "-ffile-prefix-map=${ANDROID_NDK}=./android-ndk")
++            endif()
+             target_compile_options(cubeb INTERFACE
+                 $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-implicit-const-int-float-conversion>
+                 $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-shadow>
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 3ae6d73..b196210 100644
+index 3ae6d73..d36e755 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
-@@ -161,7 +161,7 @@ android {
+@@ -150,22 +150,21 @@ android {
+             )
+         }
+ 
+-        // builds a release build that doesn't need signing
+-        // Attaches 'debug' suffix to version and package name, allowing installation alongside the release build.
++        // Preserve the package and signing identity for updates to the MH Rise build.
+         register("relWithDebInfo") {
+             isDefault = true
+             signingConfig = signingConfigs.getByName("default")
+-            isDebuggable = true
++            isDebuggable = false
+             proguardFiles(
+                 getDefaultProguardFile("proguard-android-optimize.txt"),
                  "proguard-rules.pro"
              )
  
 -            manifestPlaceholders += mapOf("appNameSuffix" to " Debug Release")
 +            manifestPlaceholders += mapOf("appNameSuffix" to "")
  
-             versionNameSuffix = "-relWithDebInfo"
+-            versionNameSuffix = "-relWithDebInfo"
++            versionNameSuffix = "-mhrise-fix"
              applicationIdSuffix = ".relWithDebInfo"
+-            isJniDebuggable = true
++            isJniDebuggable = false
+         }
+ 
+         // Signed by debug key disallowing distribution on Play Store.
 diff --git a/src/common/settings.h b/src/common/settings.h
 index 2a4bf3e..e302a8f 100644
 --- a/src/common/settings.h

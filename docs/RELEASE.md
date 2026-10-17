@@ -10,13 +10,13 @@ Esta é uma distribuição **não oficial**, específica para a investigação d
 - Nome visível: **Eden**, sem “Debug Release”.
 - Arquitetura: ARM64; Android 13/API 33 ou superior.
 - Pacote: `dev.eden.eden_emulator.relWithDebInfo`.
-- Versão: `14da448-relWithDebInfo`; versionCode `34064604`.
-- Variante de desenvolvimento `MainlineRelWithDebInfo`, com assinatura Android Debug validada. Retirar o sufixo do nome não transforma a build em versão oficial ou assinatura de produção.
-- SHA-256: `16324ccafdb370c1f795299444de0cd87201cae66d3432ae2c874ab1266b349b`.
+- Versão: `14da448-mhrise-fix`; versionCode `34066238`.
+- **Não depurável:** depuração Android e JNI desativadas. O nome interno da tarefa permanece `MainlineRelWithDebInfo`; pacote e assinatura foram preservados para atualização compatível sobre a build anterior. A assinatura continua sendo a de desenvolvimento, e a distribuição continua não oficial.
+- SHA-256: `959a1782d106d265b64fabd0eedb2a50cf0f6f2742a8f236161aa4d95190b12d`.
 
-As duas correções da referência validada foram mantidas: máscara constante do sampler e limite de índices indiretos. O experimento posterior AppletRing não está nesta release. O valor padrão de `debug_knobs` é 16392, habilitando os fixes em instalações novas; configurações antigas explícitas podem prevalecer. Use GPU baixa, DMA/fences padrão e modo portátil como na referência.
+As duas correções da referência validada foram mantidas: máscara constante do sampler e limite de índices indiretos. O experimento posterior AppletRing não está nesta release. O valor padrão de `debug_knobs` é 16392, habilitando os fixes em instalações novas; configurações antigas explícitas podem prevalecer. Use GPU baixa, DMA/fences padrão e modo portátil como na referência. Caminhos locais do código e do NDK são remapeados na compilação Android com `-ffile-prefix-map`; o relatório de dependências também foi higienizado.
 
-A referência anterior foi testada no mapa pelo jogador, que confirmou insetos presentes sem piscar, brilho corrigido e melhor fluidez. Esta recompilação altera nome visível/defaults e passou no build, conferência do manifest e verificação de assinatura, mas **não recebeu um novo teste manual em missão**. O hash anterior 33e52e... identifica outro arquivo, preservado no histórico. Não há garantia para outros jogos/aparelhos nem promessa de FPS sustentado.
+A referência anterior foi testada no mapa pelo jogador, que confirmou insetos presentes sem piscar, brilho corrigido e melhor fluidez. Esta recompilação desativa a depuração Android/JNI, remapeia caminhos locais e passou no build, conferência do manifest, verificação de assinatura e busca limitada por identificadores particulares, mas **não recebeu um novo teste manual em missão**. O hash anterior 33e52e... identifica outro arquivo, preservado no histórico. Não há garantia para outros jogos/aparelhos nem promessa de FPS sustentado.
 
 ## Fontes correspondentes e licenças
 
