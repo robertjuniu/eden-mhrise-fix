@@ -8,5 +8,6 @@
 - **Capcom:** Monster Hunter Rise e Sunbreak são títulos da Capcom. Não há vínculo nem aprovação declarada da Capcom, Nintendo ou Samsung para esta investigação.
 - **robertjuniu:** manutenção deste registro independente e avaliação manual das builds no Galaxy S25. Isso não atribui a propriedade ou autoria do emulador ao mantenedor.
 - **OpenAI Codex:** assistência substancial na investigação, implementação experimental e documentação, declarada por transparência. Não é indicado como titular de copyright do Eden ou como signatário humano.
+- **hashcade, Jing Haihan/jinghaihan e kvasszn/ree-save-editor:** respectivamente, versão derivada indicada, autoria original do MHRise Save Converter (MIT, copyright 2026 Jing Haihan) e pesquisa do formato creditada pelo conversor. Ferramenta externa recomendada em [SAVE-CONVERSION.md](docs/SAVE-CONVERSION.md), sem incorporação de código/binário neste projeto.
 
 Os nomes dos projetos identificam suas origens. Este repositório não transfere propriedade sobre marcas nem apresenta o fix como produto oficial.

@@ -12,7 +12,7 @@ Este repositório preserva a licença e os avisos nos patches, identifica mudan�
 
 A seção 6 da GPL trata da distribuição de código objeto. É necessário cumprir uma das formas previstas de disponibilizar o **Corresponding Source**, incluindo o código necessário e os scripts de build/instalação aplicáveis, com as dependências que não se enquadrem nas exceções da licença.
 
-Este repositório publica patches/documentação, não APKs. O hash do APK local é evidência do teste, não uma oferta pública de download. Antes de disponibilizá-lo, organize as fontes exatas da versão correspondente, dependências/licenças e instruções acessíveis aos destinatários. Não anuncie simplesmente o master atual ou somente dois patches isolados como fonte completa de um APK que contém mais alterações.
+A release experimental disponibiliza o APK junto de pacotes da árvore modificada do Eden, fontes/dependências nativas e fontes/POMs Maven, scripts, avisos e checksums. Consulte [RELEASE.md](RELEASE.md). O commit base e o patch completo da release identificam o código correspondente; as bibliotecas pré-compiladas têm fontes e scripts dos respectivos fornecedores incluídos. A oferta de fonte não aponta apenas para o master atual nem apenas para os dois patches isolados.
 
 Referências: [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html), [README do Eden](https://git.eden-emu.dev/eden-emu/eden/src/branch/master/README.md), [CONTRIBUTING](https://git.eden-emu.dev/eden-emu/eden/src/branch/master/CONTRIBUTING.md).
 
@@ -30,4 +30,4 @@ O documento upstream descreve contribuições por Forgejo, mirrors e patches por
 
 ## Conteúdo excluído
 
-Não foram incluídos APKs, jogos, keys, firmware, saves, tokens, configurações pessoais completas, endereços ADB, identificadores do aparelho, dumps de shaders do jogo ou perfis brutos. O histórico público resume as evidências sem expor esses dados.
+Não foram incluídos jogos, keys de console, firmware, saves, tokens, chaves particulares de assinatura, configurações pessoais completas, endereços ADB, identificadores particulares do aparelho, dumps de shaders do jogo ou perfis brutos. A release inclui o APK e as fontes descritas acima; o histórico público resume as evidências sem expor dados particulares.

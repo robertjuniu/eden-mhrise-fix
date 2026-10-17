@@ -51,6 +51,6 @@ O arquivo `config/mhrise-reference.ini` é um fragmento de referência, não um 
 
 ## Instalação
 
-Este repositório não disponibiliza binários. Instale uma build feita a partir de fontes de sua confiança e use somente o conteúdo necessário que você possui legitimamente. Não fornecemos jogos, keys, firmware ou dumps do jogo.
+O APK experimental e as fontes correspondentes estão na [release](RELEASE.md). Use o patch `release-mhrise-full.patch` em vez do validado ao reconstruir a versão com nome visível Eden e correções ativas por padrão. Se extrair o pacote de fontes da release, ele já está modificado; não aplique o patch novamente. Use somente o conteúdo necessário que você possui legitimamente. Não fornecemos jogos, keys de console, firmware ou dumps do jogo.
 
 Se for publicar um binário derivado, prepare antes uma distribuição do código-fonte correspondente completo e sua cadeia de dependências/build, preservando as licenças. Consulte `PUBLICATION.md`.

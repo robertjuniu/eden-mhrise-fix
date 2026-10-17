@@ -2,6 +2,8 @@
 
 Documentação e patches de uma investigação independente de brilho incorreto e objetos ausentes em **Monster Hunter Rise / Sunbreak**, usando Eden no Galaxy S25. Alterações e testes realizados em 14–17 de outubro de 2026.
 
+**APK:** [baixar Eden_MHRISEFIX.apk](https://github.com/robertjuniu/eden-mhrise-fix/releases/download/mhrise-fix-2026.10.17/Eden_MHRISEFIX.apk). Consulte a [release](https://github.com/robertjuniu/eden-mhrise-fix/releases/tag/mhrise-fix-2026.10.17) para fontes correspondentes, licenças e hashes; veja [RELEASE.md](docs/RELEASE.md) para instalação e limitações. O nome visível no Android é **Eden**.
+
 **Eden não é um projeto deste repositório nem de seu mantenedor.** É software livre do Eden Emulator Project, iniciado por Camille LaVey, com contribuições e código herdado dos projetos citados em [CREDITS.md](CREDITS.md). Este material não é uma versão oficial, não tem aprovação declarada dos desenvolvedores e não representa o projeto Eden.
 
 ## Resultado validado
@@ -46,10 +48,14 @@ O Eden declara licença **GNU GPL versão 3 ou posterior**. Os patches derivados
 
 Esta investigação, suas alterações de código e esta documentação tiveram assistência substancial de **OpenAI Codex**. O jogador executou e avaliou testes visuais no próprio aparelho; isso não equivale a revisão humana completa de cada linha. Não alegamos revisão ou aceitação pelo upstream. Nenhuma assinatura de desenvolvedor humano foi criada automaticamente.
 
-Este repositório distribui documentação e patches, **sem APKs, jogos, firmware, chaves de console, saves ou dumps de shaders do jogo**. O hash acima identifica o artefato local testado. Antes de distribuir um APK, é necessário disponibilizar seu código-fonte correspondente completo e as instruções/dependências de build exigidas pela GPL; um link para a versão atual do Eden ou somente os dois patches isolados não basta como substituto desse cuidado.
+O repositório contém documentação e patches; a release experimental fornece o APK **junto de três pacotes de fontes/dependências**, scripts, licenças e hashes. Não são distribuídos jogos, firmware, chaves de console, saves ou dumps de shaders do jogo. O hash da tabela identifica o artefato originalmente testado; o APK recompilado com nome Eden e defaults ativos tem hash `16324ccafdb370c1f795299444de0cd87201cae66d3432ae2c874ab1266b349b`. As diferenças e validações estão em [RELEASE.md](docs/RELEASE.md).
 
 ## Desempenho
 
 A referência atingiu aproximadamente 30 FPS numa amostra curta do lobby. Isso não mede uma luta pesada nem garante 30 FPS sustentados. Após testes prolongados, o Android reportou limitação térmica severa; a variante posterior de captura não teve ganho perceptível confirmado. Consulte as limitações em [TESTS.md](docs/TESTS.md).
+
+## Saves Steam → Switch
+
+Consulte [SAVE-CONVERSION.md](docs/SAVE-CONVERSION.md): recomendação da versão [hashcade/mhrise-save-converter](https://github.com/hashcade/mhrise-save-converter), com créditos ao autor original **Jing Haihan** e à pesquisa **kvasszn/ree-save-editor**. No teste do jogador, Steam → Switch funcionou mantendo apenas o slot 1 na cópia usada para converter e removendo os slots 2/3. É um relato específico, não uma exigência universal; mantenha backups dos saves originais.
 
 Para suporte oficial e downloads oficiais, use os canais do [Eden](https://eden-emu.dev). Resultados desta modificação devem ser identificados como provenientes de uma build não oficial.
