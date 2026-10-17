@@ -1,0 +1,32 @@
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index e7da9d9..b10369b 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -4,6 +4,7 @@
+ // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
+ #include <cstring>
+ #include <optional>
+ #include "common/assert.h"
+@@ -223,9 +224,18 @@ void Maxwell3D::ProcessMacro(Core::System& system, u32 method, const u32* base_s
+ }
+ 
+ void Maxwell3D::RefreshParametersImpl() {
+-    if (!Settings::IsGPULevelHigh()) {
++    const bool high_accuracy = Settings::IsGPULevelHigh();
++    const bool test_macro_refresh = (Settings::values.debug_knobs.GetValue() & 32U) != 0;
++    if (!high_accuracy && !test_macro_refresh) {
+         return;
+     }
++    if (!high_accuracy) {
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Macro refresh experiment: refreshing GPU-written parameters "
++                                "with low GPU accuracy");
++        }
++    }
+     size_t current_index = 0;
+     for (auto& segment : macro_segments) {
+         if (segment.first == 0) {

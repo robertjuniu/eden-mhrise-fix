@@ -1,0 +1,87 @@
+diff --git a/src/video_core/macro.cpp b/src/video_core/macro.cpp
+index 86f528a..03f8f76 100644
+--- a/src/video_core/macro.cpp
++++ b/src/video_core/macro.cpp
+@@ -4,6 +4,7 @@
+ // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
+ #include <cstring>
+ #include <fstream>
+ #include <optional>
+@@ -39,6 +40,22 @@ using Maxwell3D = Engines::Maxwell3D;
+ 
+ namespace {
+ 
++bool UseLowAccuracyIndirect(const Maxwell3D& maxwell3d, size_t word_count) {
++    if (Settings::IsGPULevelHigh() || (Settings::values.debug_knobs.GetValue() & 1024U) == 0) {
++        return false;
++    }
++    const GPUVAddr start = maxwell3d.GetMacroAddress(1);
++    if (start == 0) {
++        return false;
++    }
++    for (size_t index = 1; index < word_count; ++index) {
++        if (maxwell3d.GetMacroAddress(1 + index) != start + index * sizeof(u32)) {
++            return false;
++        }
++    }
++    return true;
++}
++
+ bool IsTopologySafe(Maxwell3D::Regs::PrimitiveTopology topology) {
+     switch (topology) {
+     case Maxwell3D::Regs::PrimitiveTopology::Points:
+@@ -66,10 +83,18 @@ bool IsTopologySafe(Maxwell3D::Regs::PrimitiveTopology topology) {
+ 
+ void HLE_DrawArraysIndirect::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, [[maybe_unused]] u32 method) {
+     auto topology = static_cast<Maxwell3D::Regs::PrimitiveTopology>(parameters[0]);
+-    if (!maxwell3d.AnyParametersDirty() || !IsTopologySafe(topology)) {
++    const bool low_indirect = UseLowAccuracyIndirect(maxwell3d, 4);
++    if ((!maxwell3d.AnyParametersDirty() && !low_indirect) || !IsTopologySafe(topology)) {
+         Fallback(system, maxwell3d, parameters);
+         return;
+     }
++    if (low_indirect && !maxwell3d.AnyParametersDirty()) {
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Low indirect experiment: using GPU array parameters "
++                                "without a dirty marker");
++        }
++    }
+ 
+     auto& params = maxwell3d.draw_manager.indirect_state;
+     params.is_byte_count = false;
+@@ -125,10 +150,18 @@ void HLE_DrawArraysIndirect::Fallback(Core::System& system, Engines::Maxwell3D&
+ 
+ void HLE_DrawIndexedIndirect::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, [[maybe_unused]] u32 method) {
+     auto topology = static_cast<Maxwell3D::Regs::PrimitiveTopology>(parameters[0]);
+-    if (!maxwell3d.AnyParametersDirty() || !IsTopologySafe(topology)) {
++    const bool low_indirect = UseLowAccuracyIndirect(maxwell3d, 5);
++    if ((!maxwell3d.AnyParametersDirty() && !low_indirect) || !IsTopologySafe(topology)) {
+         Fallback(system, maxwell3d, parameters);
+         return;
+     }
++    if (low_indirect && !maxwell3d.AnyParametersDirty()) {
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Low indirect experiment: using GPU indexed parameters "
++                                "without a dirty marker");
++        }
++    }
+ 
+     const u32 estimate = u32(maxwell3d.EstimateIndexBufferSize());
+     const u32 element_base = parameters[4];
+@@ -1420,6 +1453,11 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
+         ci.program = Compile(system, maxwell3d, code);
+     }
+ 
++    if ((Settings::values.debug_knobs.GetValue() & 512U) != 0) {
++        LOG_WARNING(HW_GPU, "Macro mapping: code {:x} hash {:016x} variant {}", method,
++                    ci.hash, ci.program.index());
++    }
++
+     execute_variant(ci.program);
+     if (Settings::values.dump_macros) {
+         Dump(ci.hash, code, !std::holds_alternative<std::monostate>(ci.program));

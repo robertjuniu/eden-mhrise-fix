@@ -1,0 +1,11 @@
+{
+  "valid": true,
+  "frames": 119,
+  "duration_seconds": 3.932700831,
+  "fps_mean": 30.00482494621773,
+  "median_frame_ms": 33.328385,
+  "p90_frame_ms": 33.334323,
+  "max_frame_ms": 58.324322,
+  "first_present_ns": 197784828186630,
+  "last_present_ns": 197788760887461
+}

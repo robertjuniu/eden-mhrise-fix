@@ -1,0 +1,55 @@
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index f43bea1..390dd51 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <memory>
+ #include <mutex>
+ 
+@@ -583,6 +584,26 @@ void RasterizerVulkan::Clear(u32 layer_count) {
+ }
+ 
+ void RasterizerVulkan::DispatchCompute() {
++    const auto synchronize_compute_output = [this] {
++        if ((Settings::values.debug_knobs.GetValue() & 2048U) == 0) {
++            return;
++        }
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Compute visibility experiment: making shader writes visible "
++                                "to following GPU commands without CPU readback");
++        }
++        scheduler.Record([](vk::CommandBuffer cmdbuf) {
++            static constexpr VkMemoryBarrier barrier{
++                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
++                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
++            };
++            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier);
++        });
++    };
+     FlushWork();
+     gpu_memory->FlushCaching();
+ 
+@@ -612,6 +633,7 @@ void RasterizerVulkan::DispatchCompute() {
+             }
+             cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
+         });
++        synchronize_compute_output();
+         return;
+     }
+     const std::array<u32, 3> dim{qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z};
+@@ -634,6 +656,7 @@ void RasterizerVulkan::DispatchCompute() {
+         }
+         cmdbuf.Dispatch(dim[0], dim[1], dim[2]);
+     });
++    synchronize_compute_output();
+ 
+     // Log compute dispatch
+     if (GPU::Logging::IsActive() &&

@@ -1,0 +1,52 @@
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index a85e281..35ecbbd 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -15,12 +15,14 @@
+ #include <bit>
+ #include <numeric>
+ #include "common/cityhash.h"
++#include "common/fs/file.h"
+ #include "common/fs/fs.h"
+ #include "common/fs/path_util.h"
+ #include "common/thread_worker.h"
+ #include "core/core.h"
+ #include "shader_recompiler/backend/spirv/emit_spirv.h"
+ #include "shader_recompiler/environment.h"
++#include "shader_recompiler/frontend/ir/program.h"
+ #include "shader_recompiler/frontend/maxwell/control_flow.h"
+ #include "shader_recompiler/frontend/maxwell/translate_program.h"
+ #include "shader_recompiler/ir_opt/passes.h"
+@@ -63,6 +65,16 @@ using VideoCommon::FileEnvironment;
+ using VideoCommon::GenericEnvironment;
+ using VideoCommon::GraphicsEnvironment;
+ 
++void DumpShaderIR(u64 shader_hash, const Shader::IR::Program& program) {
++    const auto& dump_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir);
++    const auto path = dump_dir / fmt::format("{:016x}_{:016x}.ir",
++                                           Settings::GetCurrentProgramID(), shader_hash);
++    const std::string text = Shader::IR::DumpProgram(program);
++    if (Common::FS::WriteStringToFile(path, Common::FS::FileType::TextFile, text) != text.size()) {
++        LOG_WARNING(Render_Vulkan, "Failed to dump shader IR {:016x}", shader_hash);
++    }
++}
++
+ constexpr u32 CACHE_VERSION = 18;
+ constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
+ constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
+@@ -890,6 +902,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+             if (should_dump) {
+                 GPU::Logging::DumpSpirvShader(key.unique_hashes[index],
+                                               std::span<const u32>(code.data(), code.size()));
++                DumpShaderIR(key.unique_hashes[index], program);
+             }
+         }
+ 
+@@ -1016,6 +1029,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
+         if (should_dump) {
+             GPU::Logging::DumpSpirvShader(key.unique_hash,
+                                           std::span<const u32>(code.data(), code.size()));
++            DumpShaderIR(key.unique_hash, program);
+         }
+     }
+ 

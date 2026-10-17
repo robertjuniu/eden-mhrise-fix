@@ -1,0 +1,37 @@
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index 53addb5..20bd862 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <memory>
+ #include <numeric>
+ 
+@@ -702,6 +718,24 @@ void BufferCache<P>::PopAsyncBuffers() {
+         });
+         async_downloads.Subtract(device_addr, copy.size, [&](DAddr start, DAddr end) {
+             gpu_modified_ranges.Subtract(start, end - start);
++            if ((Settings::values.debug_knobs.GetValue() & 1024U) != 0) {
++                const auto preserve_pending = [this](DAddr pending_start, DAddr pending_end) {
++                    if (pending_start >= pending_end) {
++                        return;
++                    }
++                    gpu_modified_ranges.Add(pending_start, pending_end - pending_start);
++                    static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++                    if (!logged.test_and_set(std::memory_order_relaxed)) {
++                        LOG_WARNING(HW_GPU, "Pending writes experiment: preserving a newer GPU "
++                                            "write while retiring an older readback");
++                    }
++                };
++                uncommitted_gpu_modified_ranges.ForEachInRange(start, end - start,
++                                                               preserve_pending);
++                for (const auto& pending : committed_gpu_modified_ranges) {
++                    pending.ForEachInRange(start, end - start, preserve_pending);
++                }
++            }
+         });
+     }
+     async_buffers_death_ring.emplace_back(*async_buffer);

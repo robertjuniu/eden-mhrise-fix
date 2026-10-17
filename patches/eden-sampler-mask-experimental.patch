@@ -1,0 +1,359 @@
+diff --git a/src/shader_recompiler/environment.h b/src/shader_recompiler/environment.h
+index 184b56e..49248f5 100644
+--- a/src/shader_recompiler/environment.h
++++ b/src/shader_recompiler/environment.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <vector>
+ #include "common/container/unordered_map.h"
+ 
+ #include "common/common_types.h"
+@@ -40,9 +41,10 @@ struct HandleKey {
+     u32 sec_index, sec_offset, sec_shift_left;
+     u32 count;
+     bool has_secondary;
++    u32 constant_mask{};
+     constexpr bool operator==(const HandleKey& o) const noexcept {
+-        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary)
+-            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary);
++        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary, constant_mask)
++            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary, o.constant_mask);
+     }
+ };
+ struct HandleKeyHash {
+@@ -52,6 +54,7 @@ struct HandleKeyHash {
+         h ^= (size_t(k.sec_index) << 33) ^ (size_t(k.sec_offset) << 2);
+         h ^= (size_t(k.sec_shift_left) << 3);
+         h ^= (size_t(k.count) << 7);
++        h ^= (size_t(k.constant_mask) << 11);
+         return h ^ (k.has_secondary ? 0x9e3779b97f4a7c15ULL : 0ULL);
+     }
+ };
+@@ -66,6 +69,7 @@ struct ConstBufferAddr {
+     IR::U32 dynamic_offset;
+     u32 count;
+     bool has_secondary;
++    u32 constant_mask{};
+ };
+ 
+ class Environment {
+@@ -129,6 +133,7 @@ public:
+     ::Common::unordered_map<CbufWordKey, u32, CbufWordKeyHash> cbuf_word_cache;
+     ::Common::unordered_map<HandleKey,  u32, HandleKeyHash> handle_cache;
+     ::Common::unordered_map<const IR::Inst*, ConstBufferAddr> track_cache;
++    std::vector<const IR::Inst*> track_in_progress;
+ };
+ 
+ } // namespace Shader
+diff --git a/src/shader_recompiler/ir_opt/texture_pass.cpp b/src/shader_recompiler/ir_opt/texture_pass.cpp
+index fe34a67..b1da04a 100644
+--- a/src/shader_recompiler/ir_opt/texture_pass.cpp
++++ b/src/shader_recompiler/ir_opt/texture_pass.cpp
+@@ -13,6 +13,7 @@
+ #include <boost/container/small_vector.hpp>
+ 
+ #include "common/settings.h"
++#include "common/scope_exit.h"
+ #include "shader_recompiler/environment.h"
+ #include "shader_recompiler/frontend/ir/basic_block.h"
+ #include "shader_recompiler/frontend/ir/breadth_first_search.h"
+@@ -273,14 +274,14 @@ static inline u32 GetTextureHandleCached(Environment& env, const ConstBufferAddr
+     // If has secondary, then it will be cbuf.secondary_{index|offset}, else its 0.
+     // So we can just hand it out the raw variable without using sec_idx or sec_off
+     // because comparing 0 against 0 will yield true.
+-    const HandleKey hk{cbuf.index, cbuf.offset, cbuf.shift_left, cbuf.secondary_index, cbuf.secondary_offset, cbuf.secondary_shift_left, cbuf.count, cbuf.has_secondary};
++    const HandleKey hk{cbuf.index, cbuf.offset, cbuf.shift_left, cbuf.secondary_index, cbuf.secondary_offset, cbuf.secondary_shift_left, cbuf.count, cbuf.has_secondary, cbuf.constant_mask};
+     if (auto it = env.handle_cache.find(hk); it != env.handle_cache.end())
+         return it->second;
+     const u32 sec_idx = cbuf.has_secondary ? cbuf.secondary_index  : cbuf.index;
+     const u32 sec_off = cbuf.has_secondary ? cbuf.secondary_offset : cbuf.offset;
+     const u32 lhs = ReadCbufCached(env, cbuf.index, cbuf.offset) << cbuf.shift_left;
+     const u32 rhs = ReadCbufCached(env, sec_idx, sec_off) << cbuf.secondary_shift_left;
+-    const u32 handle = lhs | rhs;
++    const u32 handle = lhs | rhs | cbuf.constant_mask;
+     env.handle_cache.emplace(hk, handle);
+     return handle;
+ }
+@@ -303,6 +304,11 @@ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, c
+ static inline std::optional<ConstBufferAddr> TrackCached(const IR::Value& v, Environment& env, const HostTranslateInfo& host_info) {
+     if (const IR::Inst* key = v.InstRecursive()) {
+         if (auto it = env.track_cache.find(key); it != env.track_cache.end()) return it->second;
++        if (std::ranges::find(env.track_in_progress, key) != env.track_in_progress.end()) {
++            return std::nullopt;
++        }
++        env.track_in_progress.push_back(key);
++        SCOPE_EXIT { env.track_in_progress.pop_back(); };
+         auto found = Track(v, env, host_info);
+         if (found) env.track_cache.emplace(key, *found);
+         return found;
+@@ -344,6 +350,26 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+     default:
+         return std::nullopt;
+     case IR::Opcode::BitwiseOr32: {
++        if ((Settings::values.debug_knobs.GetValue() & 8U) != 0) {
++            for (size_t arg = 0; arg < 2; ++arg) {
++                if (!inst->Arg(arg).IsImmediate()) {
++                    continue;
++                }
++                const u32 mask = inst->Arg(arg).U32();
++                if (mask == 0 || (mask & 0xFFFFFU) != 0) {
++                    continue;
++                }
++                auto source = TrackCached(inst->Arg(1 - arg), env, host_info);
++                if (source) {
++                    const u32 original = GetTextureHandleCached(env, *source);
++                    source->constant_mask |= mask;
++                    LOG_WARNING(Shader,
++                                "Texture mask experiment: cbuf {} offset {} handle {:08x} -> {:08x}",
++                                source->index, source->offset, original, original | mask);
++                    return source;
++                }
++            }
++        }
+         std::optional lhs{TrackCached(inst->Arg(0), env, host_info)};
+         std::optional rhs{TrackCached(inst->Arg(1), env, host_info)};
+         if (!lhs || !rhs) {
+@@ -368,6 +394,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+             .dynamic_offset = {},
+             .count = 1,
+             .has_secondary = true,
++            .constant_mask = lhs->constant_mask | rhs->constant_mask,
+         };
+     }
+     case IR::Opcode::ShiftLeftLogical32: {
+@@ -378,6 +405,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+         std::optional lhs{TrackCached(inst->Arg(0), env, host_info)};
+         if (lhs) {
+             lhs->shift_left = shift.U32();
++            lhs->constant_mask = shift.U32() < 32 ? lhs->constant_mask << shift.U32() : 0;
+         }
+         return lhs;
+     }
+@@ -406,6 +434,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+         std::optional lhs{TrackCached(op1, env, host_info)};
+         if (lhs) {
+             lhs->shift_left = static_cast<u32>(std::countr_zero(op2.U32()));
++            lhs->constant_mask &= op2.U32();
+         }
+         return lhs;
+         break;
+@@ -502,7 +531,7 @@ u32 GetTextureHandle(Environment& env, const ConstBufferAddr& cbuf) {
+     const u32 lhs_raw{env.ReadCbufValue(cbuf.index, cbuf.offset) << cbuf.shift_left};
+     const u32 rhs_raw{env.ReadCbufValue(secondary_index, secondary_offset)
+                       << cbuf.secondary_shift_left};
+-    return lhs_raw | rhs_raw;
++    return lhs_raw | rhs_raw | cbuf.constant_mask;
+ }
+ 
+ [[maybe_unused]] TextureType ReadTextureType(Environment& env, const ConstBufferAddr& cbuf) {
+@@ -536,7 +565,8 @@ public:
+                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
+                    desc.secondary_shift_left == existing.secondary_shift_left &&
+                    desc.count == existing.count && desc.size_shift == existing.size_shift &&
+-                   desc.has_secondary == existing.has_secondary;
++                   desc.has_secondary == existing.has_secondary &&
++                   desc.constant_mask == existing.constant_mask;
+         });
+     }
+ 
+@@ -544,7 +574,8 @@ public:
+         const u32 index{Add(image_buffer_descriptors, desc, [&desc](const auto& existing) {
+             return desc.format == existing.format && desc.cbuf_index == existing.cbuf_index &&
+                    desc.cbuf_offset == existing.cbuf_offset && desc.count == existing.count &&
+-                   desc.size_shift == existing.size_shift;
++                   desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         image_buffer_descriptors[index].is_written |= desc.is_written;
+         image_buffer_descriptors[index].is_read |= desc.is_read;
+@@ -562,7 +593,8 @@ public:
+                    desc.secondary_cbuf_index == existing.secondary_cbuf_index &&
+                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
+                    desc.secondary_shift_left == existing.secondary_shift_left &&
+-                   desc.count == existing.count && desc.size_shift == existing.size_shift;
++                   desc.count == existing.count && desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         // TODO: Read this from TIC
+         texture_descriptors[index].is_multisample |= desc.is_multisample;
+@@ -575,7 +607,8 @@ public:
+             return desc.type == existing.type && desc.format == existing.format &&
+                    desc.cbuf_index == existing.cbuf_index &&
+                    desc.cbuf_offset == existing.cbuf_offset && desc.count == existing.count &&
+-                   desc.size_shift == existing.size_shift;
++                   desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         image_descriptors[index].is_written |= desc.is_written;
+         image_descriptors[index].is_read |= desc.is_read;
+@@ -669,6 +702,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+     env.cbuf_word_cache.clear();
+     env.handle_cache.clear();
+     env.track_cache.clear();
++    env.track_in_progress.clear();
+     TextureInstVector to_replace;
+     for (IR::Block* const block : program.post_order_blocks) {
+         for (IR::Inst& inst : block->Instructions()) {
+@@ -780,6 +814,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .cbuf_offset = cbuf.offset,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             } else {
+                 index = descriptors.Add(ImageDescriptor{
+@@ -792,6 +827,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .cbuf_offset = cbuf.offset,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             }
+             break;
+@@ -808,6 +844,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .secondary_shift_left = cbuf.secondary_shift_left,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             } else {
+                 count = std::min(count, sampled_dynamic_cap);
+@@ -826,6 +863,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .secondary_shift_left = cbuf.secondary_shift_left,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+                 flags.is_integer.Assign(is_integer ? 1 : 0);
+             }
+diff --git a/src/shader_recompiler/shader_info.h b/src/shader_recompiler/shader_info.h
+index 71309e0..34eccaa 100644
+--- a/src/shader_recompiler/shader_info.h
++++ b/src/shader_recompiler/shader_info.h
+@@ -186,6 +186,7 @@ struct TextureBufferDescriptor {
+     u32 secondary_shift_left;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const TextureBufferDescriptor&) const = default;
+ };
+@@ -200,6 +201,7 @@ struct ImageBufferDescriptor {
+     u32 cbuf_offset;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const ImageBufferDescriptor&) const = default;
+ };
+@@ -219,6 +221,7 @@ struct TextureDescriptor {
+     u32 secondary_shift_left;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const TextureDescriptor&) const = default;
+ };
+@@ -234,6 +237,7 @@ struct ImageDescriptor {
+     u32 cbuf_offset;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const ImageDescriptor&) const = default;
+ };
+diff --git a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+index f0a7baf..9b56641 100644
+--- a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+@@ -119,10 +119,10 @@ void ComputePipeline::Configure() {
+                 const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                 const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                   << desc.secondary_shift_left};
+-                return TexturePair(lhs_raw | rhs_raw, via_header_index);
++                return TexturePair(lhs_raw | rhs_raw | desc.constant_mask, via_header_index);
+             }
+         }
+-        return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++        return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+     }};
+     const auto add_image{[&](const auto& desc, bool blacklist) {
+         for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+index 8354546..9152213 100644
+--- a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+@@ -320,11 +320,11 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                     const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                     const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                       << desc.secondary_shift_left};
+-                    const u32 raw{lhs_raw | rhs_raw};
++                    const u32 raw{lhs_raw | rhs_raw | desc.constant_mask};
+                     return TexturePair(raw, via_header_index);
+                 }
+             }
+-            return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++            return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+         }};
+         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
+             for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+index 29356cf..46122e1 100644
+--- a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+@@ -185,10 +185,10 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+                                              secondary_offset};
+                 const u32 lhs_raw{gpu_memory.Read<u32>(addr) << desc.shift_left};
+                 const u32 rhs_raw{gpu_memory.Read<u32>(separate_addr) << desc.secondary_shift_left};
+-                return TexturePair(lhs_raw | rhs_raw, via_header_index);
++                return TexturePair(lhs_raw | rhs_raw | desc.constant_mask, via_header_index);
+             }
+         }
+-        return TexturePair(gpu_memory.Read<u32>(addr), via_header_index);
++        return TexturePair(gpu_memory.Read<u32>(addr) | desc.constant_mask, via_header_index);
+     }};
+     const auto add_image{[&](const auto& desc, bool blacklist) {
+         for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 8b5b0bc..9ecc105 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstring>
+ #include <iostream>
+ #include <span>
+@@ -379,6 +380,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+             const u32 index_offset{index << desc.size_shift};
+             const u32 offset{desc.cbuf_offset + index_offset};
+             const GPUVAddr addr{cbufs[desc.cbuf_index].address + offset};
++            if (desc.constant_mask != 0) {
++                static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++                if (!logged.test_and_set(std::memory_order_relaxed)) {
++                    LOG_WARNING(Render_Vulkan,
++                                "Texture mask binding: mask {:08x}, header index {}",
++                                desc.constant_mask, via_header_index);
++                }
++            }
+             if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&> ||
+                           std::is_same_v<decltype(desc), const Shader::TextureBufferDescriptor&>) {
+                 if (desc.has_secondary) {
+@@ -389,11 +398,11 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                     const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                     const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                       << desc.secondary_shift_left};
+-                    const u32 raw{lhs_raw | rhs_raw};
++                    const u32 raw{lhs_raw | rhs_raw | desc.constant_mask};
+                     return TexturePair(raw, via_header_index);
+                 }
+             }
+-            return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++            return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+         }};
+         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
+             for (u32 index = 0; index < desc.count; ++index) {

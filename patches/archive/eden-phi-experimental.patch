@@ -1,0 +1,168 @@
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+index b562e82..98d4796 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+@@ -950,9 +950,6 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
+         AddLabel();
+         const size_t num_buffers{info.storage_buffers_descriptors.size()};
+         for (size_t index = 0; index < num_buffers; ++index) {
+-            if (!info.nvn_buffer_used[index]) {
+-                continue;
+-            }
+             const auto& ssbo{info.storage_buffers_descriptors[index]};
+             const Id ssbo_addr_cbuf_offset{Const(ssbo.cbuf_offset / 8)};
+             const Id ssbo_size_cbuf_offset{Const(ssbo.cbuf_offset / 4 + 2)};
+diff --git a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+index f49d54e..c860220 100644
+--- a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
++++ b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+@@ -10,6 +10,8 @@
+ #include <boost/container/small_vector.hpp>
+ 
+ #include "common/alignment.h"
++#include "common/container/unordered_set.h"
++#include "common/settings.h"
+ #include "shader_recompiler/frontend/ir/basic_block.h"
+ #include "shader_recompiler/frontend/ir/breadth_first_search.h"
+ #include "shader_recompiler/frontend/ir/ir_emitter.h"
+@@ -369,8 +371,56 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias)
+     return BreadthFirstSearch(value, pred);
+ }
+ 
++bool HasAmbiguousPhiAddress(const IR::Value& value, const Bias& bias) {
++    if (value.IsImmediate()) {
++        return false;
++    }
++    small_vector<const IR::Inst*, 16> pending{value.InstRecursive()};
++    Common::unordered_set<const IR::Inst*> visited;
++    std::optional<StorageBufferAddr> first_buffer;
++    bool has_phi = false;
++    bool multiple_buffers = false;
++    while (!pending.empty()) {
++        const IR::Inst* const inst = pending.back();
++        pending.pop_back();
++        if (!visited.insert(inst).second) {
++            continue;
++        }
++        const IR::Opcode opcode = inst->GetOpcode();
++        has_phi |= opcode == IR::Opcode::Phi;
++        if (opcode == IR::Opcode::GetCbufU32 || opcode == IR::Opcode::GetCbufU32x2) {
++            const IR::Value index = inst->Arg(0);
++            const IR::Value offset = inst->Arg(1);
++            if (index.IsImmediate() && offset.IsImmediate()) {
++                const StorageBufferAddr buffer{index.U32(), offset.U32()};
++                if (MeetsBias(buffer, bias) && Common::IsAligned(buffer.offset, bias.alignment)) {
++                    if (first_buffer && *first_buffer != buffer) {
++                        multiple_buffers = true;
++                    }
++                    first_buffer = buffer;
++                }
++            }
++            continue;
++        }
++        if (IsGlobalMemory(*inst) || opcode == IR::Opcode::LoadStorage32 ||
++            opcode == IR::Opcode::LoadStorage64 || opcode == IR::Opcode::LoadStorage128 ||
++            opcode == IR::Opcode::LoadStorageU8 || opcode == IR::Opcode::LoadStorageS8 ||
++            opcode == IR::Opcode::LoadStorageU16 || opcode == IR::Opcode::LoadStorageS16) {
++            continue;
++        }
++        for (size_t arg = 0; arg < inst->NumArgs(); ++arg) {
++            const IR::Value operand = inst->Arg(arg);
++            if (!operand.IsImmediate()) {
++                pending.push_back(operand.InstRecursive());
++            }
++        }
++    }
++    return has_phi && multiple_buffers;
++}
++
+ /// Collects the storage buffer used by a global memory instruction and the instruction itself
+-void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) {
++void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
++                           bool test_phi_addresses) {
+     // NVN puts storage buffers in a specific range, we have to bias towards these addresses to
+     // avoid getting false positives
+     static constexpr Bias nvn_bias{
+@@ -387,6 +437,13 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info)
+     }
+     // First try to find storage buffers in the NVN address
+     const IR::U32 low_addr{low_addr_info->value};
++    const IR::Opcode opcode = inst.GetOpcode();
++    if (test_phi_addresses &&
++        (opcode == IR::Opcode::LoadGlobal32 || opcode == IR::Opcode::LoadGlobal64 ||
++         opcode == IR::Opcode::LoadGlobal128) && HasAmbiguousPhiAddress(low_addr, nvn_bias)) {
++        LOG_WARNING(Shader, "Phi experiment: preserving dynamic global load across SSBO bases");
++        return;
++    }
+     std::optional<StorageBufferAddr> storage_buffer{Track(low_addr, &nvn_bias)};
+     if (!storage_buffer) {
+         // If it fails, track without a bias
+@@ -525,12 +582,15 @@ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
+ 
+ void GlobalMemoryToStorageBufferPass(IR::Program& program, const HostTranslateInfo& host_info) {
+     StorageInfo info;
++    // Debug knob bit 0 enables the conservative phi-address experiment.
++    const bool test_phi_addresses = program.stage == Stage::Compute && host_info.support_int64 &&
++                                    (Settings::values.debug_knobs.GetValue() & 1U) != 0;
+     for (IR::Block* const block : program.post_order_blocks) {
+         for (IR::Inst& inst : block->Instructions()) {
+             if (!IsGlobalMemory(inst)) {
+                 continue;
+             }
+-            CollectStorageBuffers(*block, inst, info);
++            CollectStorageBuffers(*block, inst, info, test_phi_addresses);
+         }
+     }
+     for (const StorageBufferAddr& storage_buffer : info.set) {
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index a85e281..35ecbbd 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -15,12 +15,14 @@
+ #include <bit>
+ #include <numeric>
+ #include "common/cityhash.h"
++#include "common/fs/file.h"
+ #include "common/fs/fs.h"
+ #include "common/fs/path_util.h"
+ #include "common/thread_worker.h"
+ #include "core/core.h"
+ #include "shader_recompiler/backend/spirv/emit_spirv.h"
+ #include "shader_recompiler/environment.h"
++#include "shader_recompiler/frontend/ir/program.h"
+ #include "shader_recompiler/frontend/maxwell/control_flow.h"
+ #include "shader_recompiler/frontend/maxwell/translate_program.h"
+ #include "shader_recompiler/ir_opt/passes.h"
+@@ -63,6 +65,16 @@ using VideoCommon::FileEnvironment;
+ using VideoCommon::GenericEnvironment;
+ using VideoCommon::GraphicsEnvironment;
+ 
++void DumpShaderIR(u64 shader_hash, const Shader::IR::Program& program) {
++    const auto& dump_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir);
++    const auto path = dump_dir / fmt::format("{:016x}_{:016x}.ir",
++                                           Settings::GetCurrentProgramID(), shader_hash);
++    const std::string text = Shader::IR::DumpProgram(program);
++    if (Common::FS::WriteStringToFile(path, Common::FS::FileType::TextFile, text) != text.size()) {
++        LOG_WARNING(Render_Vulkan, "Failed to dump shader IR {:016x}", shader_hash);
++    }
++}
++
+ constexpr u32 CACHE_VERSION = 18;
+ constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
+ constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
+@@ -890,6 +902,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+             if (should_dump) {
+                 GPU::Logging::DumpSpirvShader(key.unique_hashes[index],
+                                               std::span<const u32>(code.data(), code.size()));
++                DumpShaderIR(key.unique_hashes[index], program);
+             }
+         }
+ 
+@@ -1016,6 +1029,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
+         if (should_dump) {
+             GPU::Logging::DumpSpirvShader(key.unique_hash,
+                                           std::span<const u32>(code.data(), code.size()));
++            DumpShaderIR(key.unique_hash, program);
+         }
+     }
+ 

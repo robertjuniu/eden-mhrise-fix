@@ -1,0 +1,36 @@
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index e7da9d9..7176620 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -4,6 +4,8 @@
+ // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
++#include <chrono>
+ #include <cstring>
+ #include <optional>
+ #include "common/assert.h"
+@@ -267,6 +278,22 @@ size_t Maxwell3D::EstimateIndexBufferSize() {
+     auto const byte_size = regs.index_buffer.FormatSizeInBytes();
+     auto const max_size = 1ull << (byte_size * CHAR_BIT);
+     auto const upper_cap = GetMaxCurrentVertices() * 4 * byte_size;
++    if (upper_cap == 0 && end_address > start_address &&
++        (Settings::values.debug_knobs.GetValue() & 16384U) != 0) {
++        const size_t byte_limit = std::min<u64>(end_address - start_address,
++                                              std::numeric_limits<u32>::max());
++        const size_t layout_bytes = memory_manager.GetMemoryLayoutSize(start_address, byte_limit);
++        const size_t mapped_bytes = memory_manager.MaxContinuousRange(
++            start_address, std::min(byte_limit, layout_bytes));
++        const size_t index_count = std::min(byte_limit, mapped_bytes) / byte_size;
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (index_count != 0 && !logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Index bound experiment: zero vertex estimate replaced with {} "
++                                "indices, mapped bytes {}, registered bytes {}",
++                        index_count, mapped_bytes, end_address - start_address);
++        }
++        return index_count;
++    }
+     auto const lower_cap = std::min<size_t>(size_t(end_address - start_address), upper_cap);
+     return std::min<size_t>(memory_manager.GetMemoryLayoutSize(start_address, byte_size * max_size) / byte_size, lower_cap);
+ }

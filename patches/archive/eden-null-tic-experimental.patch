@@ -1,0 +1,33 @@
+diff --git a/src/video_core/shader_environment.cpp b/src/video_core/shader_environment.cpp
+index 4d5db7e..e211ca1 100644
+--- a/src/video_core/shader_environment.cpp
++++ b/src/video_core/shader_environment.cpp
+@@ -284,6 +284,28 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
+ Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
+                                                              bool via_header_index, u32 raw) {
+     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
++    if (handle.first > tic_limit) {
++        const size_t cached_size{std::min(static_cast<size_t>(cached_highest - cached_lowest),
++                                          code.size() * sizeof(u64))};
++        const size_t hash_size{cached_size >= INST_SIZE ? cached_size - INST_SIZE : cached_size};
++        const u64 shader_hash{Common::CityHash64(reinterpret_cast<const char*>(code.data()),
++                                                hash_size)};
++        LOG_ERROR(Render, "Invalid texture header: shader candidate {:016x}, stage {}, raw {:08x}, "
++                          "texture {}, sampler {}, limit {}, via header {}",
++                  shader_hash, static_cast<u32>(stage), raw, handle.first, handle.second,
++                  tic_limit, via_header_index);
++        if ((Settings::values.debug_knobs.GetValue() & 16U) != 0) {
++            Tegra::Texture::TICEntry null_entry{};
++            null_entry.texture_type.Assign(Tegra::Texture::TextureType::Texture2D);
++            null_entry.normalized_coords.Assign(1);
++            null_entry.format.Assign(Tegra::Texture::TextureFormat::A8B8G8R8);
++            null_entry.r_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.g_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.b_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.a_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            return null_entry;
++        }
++    }
+     ASSERT(handle.first <= tic_limit);
+     const GPUVAddr descriptor_addr{tic_addr + handle.first * sizeof(Tegra::Texture::TICEntry)};
+     Tegra::Texture::TICEntry entry;

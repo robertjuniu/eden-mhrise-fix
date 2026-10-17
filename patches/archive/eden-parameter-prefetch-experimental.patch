@@ -1,0 +1,36 @@
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index 53addb5..5223b99 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <memory>
+ #include <numeric>
+ 
+@@ -183,7 +184,22 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+ template <class P>
+ void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
+     ForEachBufferInRange(device_addr, size, [&](BufferId, Buffer& buffer) {
+-        DownloadBufferMemory(buffer, device_addr, size);
++        const bool prefetch_parameters = !Settings::IsGPULevelHigh() && size == 5 * sizeof(u32) &&
++            (Settings::values.debug_knobs.GetValue() & (4096U | 8192U)) == (4096U | 8192U);
++        if (prefetch_parameters) {
++            constexpr u64 window = 64 * 1024;
++            const DAddr start = std::max(buffer.CpuAddr(), Common::AlignDown(device_addr, window));
++            const DAddr end = std::min(buffer.CpuAddr() + buffer.SizeBytes(),
++                                      Common::AlignUp(device_addr + size, window));
++            static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++            if (!logged.test_and_set(std::memory_order_relaxed)) {
++                LOG_WARNING(HW_GPU, "Parameter prefetch experiment: downloading nearby modified "
++                                    "buffer data in a {} byte window", end - start);
++            }
++            DownloadBufferMemory(buffer, start, end - start);
++        } else {
++            DownloadBufferMemory(buffer, device_addr, size);
++        }
+     });
+ }
+ 

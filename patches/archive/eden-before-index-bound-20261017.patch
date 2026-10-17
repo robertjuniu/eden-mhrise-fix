@@ -1,0 +1,1052 @@
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+index b562e82..98d4796 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+@@ -950,9 +950,6 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
+         AddLabel();
+         const size_t num_buffers{info.storage_buffers_descriptors.size()};
+         for (size_t index = 0; index < num_buffers; ++index) {
+-            if (!info.nvn_buffer_used[index]) {
+-                continue;
+-            }
+             const auto& ssbo{info.storage_buffers_descriptors[index]};
+             const Id ssbo_addr_cbuf_offset{Const(ssbo.cbuf_offset / 8)};
+             const Id ssbo_size_cbuf_offset{Const(ssbo.cbuf_offset / 4 + 2)};
+diff --git a/src/shader_recompiler/environment.h b/src/shader_recompiler/environment.h
+index 184b56e..49248f5 100644
+--- a/src/shader_recompiler/environment.h
++++ b/src/shader_recompiler/environment.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <vector>
+ #include "common/container/unordered_map.h"
+ 
+ #include "common/common_types.h"
+@@ -40,9 +41,10 @@ struct HandleKey {
+     u32 sec_index, sec_offset, sec_shift_left;
+     u32 count;
+     bool has_secondary;
++    u32 constant_mask{};
+     constexpr bool operator==(const HandleKey& o) const noexcept {
+-        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary)
+-            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary);
++        return std::tie(index, offset, shift_left, sec_index, sec_offset, sec_shift_left, count, has_secondary, constant_mask)
++            == std::tie(o.index, o.offset, o.shift_left, o.sec_index, o.sec_offset, o.sec_shift_left, o.count, o.has_secondary, o.constant_mask);
+     }
+ };
+ struct HandleKeyHash {
+@@ -52,6 +54,7 @@ struct HandleKeyHash {
+         h ^= (size_t(k.sec_index) << 33) ^ (size_t(k.sec_offset) << 2);
+         h ^= (size_t(k.sec_shift_left) << 3);
+         h ^= (size_t(k.count) << 7);
++        h ^= (size_t(k.constant_mask) << 11);
+         return h ^ (k.has_secondary ? 0x9e3779b97f4a7c15ULL : 0ULL);
+     }
+ };
+@@ -66,6 +69,7 @@ struct ConstBufferAddr {
+     IR::U32 dynamic_offset;
+     u32 count;
+     bool has_secondary;
++    u32 constant_mask{};
+ };
+ 
+ class Environment {
+@@ -129,6 +133,7 @@ public:
+     ::Common::unordered_map<CbufWordKey, u32, CbufWordKeyHash> cbuf_word_cache;
+     ::Common::unordered_map<HandleKey,  u32, HandleKeyHash> handle_cache;
+     ::Common::unordered_map<const IR::Inst*, ConstBufferAddr> track_cache;
++    std::vector<const IR::Inst*> track_in_progress;
+ };
+ 
+ } // namespace Shader
+diff --git a/src/shader_recompiler/frontend/maxwell/translate_program.cpp b/src/shader_recompiler/frontend/maxwell/translate_program.cpp
+index 0cc4b3b..6f34fe3 100644
+--- a/src/shader_recompiler/frontend/maxwell/translate_program.cpp
++++ b/src/shader_recompiler/frontend/maxwell/translate_program.cpp
+@@ -12,6 +12,10 @@
+ #include <vector>
+ #include <queue>
+ 
++#include "common/fs/file.h"
++#include "common/fs/fs.h"
++#include "common/fs/path_util.h"
++#include "common/logging.h"
+ #include "common/settings.h"
+ #include "shader_recompiler/exception.h"
+ #include "shader_recompiler/frontend/ir/basic_block.h"
+@@ -329,7 +333,8 @@ void TightenOutputVertices(IR::Program& program) {
+ } // Anonymous namespace
+ 
+ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Block>& block_pool,
+-                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info) {
++                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info,
++                             u64 debug_shader_hash) {
+     HostTranslateInfo normalized_host_info{host_info};
+     normalized_host_info.ApplyDescriptorLimitPolicy();
+ 
+@@ -392,6 +397,18 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
+ 
+     Optimization::PositionPass(env, program);
+ 
++    if (debug_shader_hash != 0 && Settings::values.gpu_log_shader_dumps.GetValue()) {
++        const auto dump_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir) / "pre_resource";
++        if (Common::FS::CreateDirs(dump_dir)) {
++            const auto path = dump_dir / fmt::format("{:016x}_{:016x}.ir",
++                                                    Settings::GetCurrentProgramID(), debug_shader_hash);
++            const std::string text = IR::DumpProgram(program);
++            if (Common::FS::WriteStringToFile(path, Common::FS::FileType::TextFile, text) != text.size()) {
++                LOG_WARNING(Shader, "Failed to dump pre-resource IR {:016x}", debug_shader_hash);
++            }
++        }
++    }
++
+     Optimization::GlobalMemoryToStorageBufferPass(program, normalized_host_info);
+     Optimization::GeometryCompactionPass(program, normalized_host_info);
+     Optimization::TexturePass(env, program, normalized_host_info);
+diff --git a/src/shader_recompiler/frontend/maxwell/translate_program.h b/src/shader_recompiler/frontend/maxwell/translate_program.h
+index 497afe7..46b4de7 100644
+--- a/src/shader_recompiler/frontend/maxwell/translate_program.h
++++ b/src/shader_recompiler/frontend/maxwell/translate_program.h
+@@ -18,7 +18,8 @@ namespace Shader::Maxwell {
+ 
+ [[nodiscard]] IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool,
+                                            ObjectPool<IR::Block>& block_pool, Environment& env,
+-                                           Flow::CFG& cfg, const HostTranslateInfo& host_info);
++                                           Flow::CFG& cfg, const HostTranslateInfo& host_info,
++                                           u64 debug_shader_hash = 0);
+ 
+ [[nodiscard]] IR::Program MergeDualVertexPrograms(IR::Program& vertex_a, IR::Program& vertex_b,
+                                                   Environment& env_vertex_b);
+diff --git a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+index f49d54e..c860220 100644
+--- a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
++++ b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+@@ -10,6 +10,8 @@
+ #include <boost/container/small_vector.hpp>
+ 
+ #include "common/alignment.h"
++#include "common/container/unordered_set.h"
++#include "common/settings.h"
+ #include "shader_recompiler/frontend/ir/basic_block.h"
+ #include "shader_recompiler/frontend/ir/breadth_first_search.h"
+ #include "shader_recompiler/frontend/ir/ir_emitter.h"
+@@ -369,8 +371,56 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias)
+     return BreadthFirstSearch(value, pred);
+ }
+ 
++bool HasAmbiguousPhiAddress(const IR::Value& value, const Bias& bias) {
++    if (value.IsImmediate()) {
++        return false;
++    }
++    small_vector<const IR::Inst*, 16> pending{value.InstRecursive()};
++    Common::unordered_set<const IR::Inst*> visited;
++    std::optional<StorageBufferAddr> first_buffer;
++    bool has_phi = false;
++    bool multiple_buffers = false;
++    while (!pending.empty()) {
++        const IR::Inst* const inst = pending.back();
++        pending.pop_back();
++        if (!visited.insert(inst).second) {
++            continue;
++        }
++        const IR::Opcode opcode = inst->GetOpcode();
++        has_phi |= opcode == IR::Opcode::Phi;
++        if (opcode == IR::Opcode::GetCbufU32 || opcode == IR::Opcode::GetCbufU32x2) {
++            const IR::Value index = inst->Arg(0);
++            const IR::Value offset = inst->Arg(1);
++            if (index.IsImmediate() && offset.IsImmediate()) {
++                const StorageBufferAddr buffer{index.U32(), offset.U32()};
++                if (MeetsBias(buffer, bias) && Common::IsAligned(buffer.offset, bias.alignment)) {
++                    if (first_buffer && *first_buffer != buffer) {
++                        multiple_buffers = true;
++                    }
++                    first_buffer = buffer;
++                }
++            }
++            continue;
++        }
++        if (IsGlobalMemory(*inst) || opcode == IR::Opcode::LoadStorage32 ||
++            opcode == IR::Opcode::LoadStorage64 || opcode == IR::Opcode::LoadStorage128 ||
++            opcode == IR::Opcode::LoadStorageU8 || opcode == IR::Opcode::LoadStorageS8 ||
++            opcode == IR::Opcode::LoadStorageU16 || opcode == IR::Opcode::LoadStorageS16) {
++            continue;
++        }
++        for (size_t arg = 0; arg < inst->NumArgs(); ++arg) {
++            const IR::Value operand = inst->Arg(arg);
++            if (!operand.IsImmediate()) {
++                pending.push_back(operand.InstRecursive());
++            }
++        }
++    }
++    return has_phi && multiple_buffers;
++}
++
+ /// Collects the storage buffer used by a global memory instruction and the instruction itself
+-void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) {
++void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info,
++                           bool test_phi_addresses) {
+     // NVN puts storage buffers in a specific range, we have to bias towards these addresses to
+     // avoid getting false positives
+     static constexpr Bias nvn_bias{
+@@ -387,6 +437,13 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info)
+     }
+     // First try to find storage buffers in the NVN address
+     const IR::U32 low_addr{low_addr_info->value};
++    const IR::Opcode opcode = inst.GetOpcode();
++    if (test_phi_addresses &&
++        (opcode == IR::Opcode::LoadGlobal32 || opcode == IR::Opcode::LoadGlobal64 ||
++         opcode == IR::Opcode::LoadGlobal128) && HasAmbiguousPhiAddress(low_addr, nvn_bias)) {
++        LOG_WARNING(Shader, "Phi experiment: preserving dynamic global load across SSBO bases");
++        return;
++    }
+     std::optional<StorageBufferAddr> storage_buffer{Track(low_addr, &nvn_bias)};
+     if (!storage_buffer) {
+         // If it fails, track without a bias
+@@ -525,12 +582,15 @@ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
+ 
+ void GlobalMemoryToStorageBufferPass(IR::Program& program, const HostTranslateInfo& host_info) {
+     StorageInfo info;
++    // Debug knob bit 0 enables the conservative phi-address experiment.
++    const bool test_phi_addresses = program.stage == Stage::Compute && host_info.support_int64 &&
++                                    (Settings::values.debug_knobs.GetValue() & 1U) != 0;
+     for (IR::Block* const block : program.post_order_blocks) {
+         for (IR::Inst& inst : block->Instructions()) {
+             if (!IsGlobalMemory(inst)) {
+                 continue;
+             }
+-            CollectStorageBuffers(*block, inst, info);
++            CollectStorageBuffers(*block, inst, info, test_phi_addresses);
+         }
+     }
+     for (const StorageBufferAddr& storage_buffer : info.set) {
+diff --git a/src/shader_recompiler/ir_opt/texture_pass.cpp b/src/shader_recompiler/ir_opt/texture_pass.cpp
+index fe34a67..b1da04a 100644
+--- a/src/shader_recompiler/ir_opt/texture_pass.cpp
++++ b/src/shader_recompiler/ir_opt/texture_pass.cpp
+@@ -13,6 +13,7 @@
+ #include <boost/container/small_vector.hpp>
+ 
+ #include "common/settings.h"
++#include "common/scope_exit.h"
+ #include "shader_recompiler/environment.h"
+ #include "shader_recompiler/frontend/ir/basic_block.h"
+ #include "shader_recompiler/frontend/ir/breadth_first_search.h"
+@@ -273,14 +274,14 @@ static inline u32 GetTextureHandleCached(Environment& env, const ConstBufferAddr
+     // If has secondary, then it will be cbuf.secondary_{index|offset}, else its 0.
+     // So we can just hand it out the raw variable without using sec_idx or sec_off
+     // because comparing 0 against 0 will yield true.
+-    const HandleKey hk{cbuf.index, cbuf.offset, cbuf.shift_left, cbuf.secondary_index, cbuf.secondary_offset, cbuf.secondary_shift_left, cbuf.count, cbuf.has_secondary};
++    const HandleKey hk{cbuf.index, cbuf.offset, cbuf.shift_left, cbuf.secondary_index, cbuf.secondary_offset, cbuf.secondary_shift_left, cbuf.count, cbuf.has_secondary, cbuf.constant_mask};
+     if (auto it = env.handle_cache.find(hk); it != env.handle_cache.end())
+         return it->second;
+     const u32 sec_idx = cbuf.has_secondary ? cbuf.secondary_index  : cbuf.index;
+     const u32 sec_off = cbuf.has_secondary ? cbuf.secondary_offset : cbuf.offset;
+     const u32 lhs = ReadCbufCached(env, cbuf.index, cbuf.offset) << cbuf.shift_left;
+     const u32 rhs = ReadCbufCached(env, sec_idx, sec_off) << cbuf.secondary_shift_left;
+-    const u32 handle = lhs | rhs;
++    const u32 handle = lhs | rhs | cbuf.constant_mask;
+     env.handle_cache.emplace(hk, handle);
+     return handle;
+ }
+@@ -303,6 +304,11 @@ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, c
+ static inline std::optional<ConstBufferAddr> TrackCached(const IR::Value& v, Environment& env, const HostTranslateInfo& host_info) {
+     if (const IR::Inst* key = v.InstRecursive()) {
+         if (auto it = env.track_cache.find(key); it != env.track_cache.end()) return it->second;
++        if (std::ranges::find(env.track_in_progress, key) != env.track_in_progress.end()) {
++            return std::nullopt;
++        }
++        env.track_in_progress.push_back(key);
++        SCOPE_EXIT { env.track_in_progress.pop_back(); };
+         auto found = Track(v, env, host_info);
+         if (found) env.track_cache.emplace(key, *found);
+         return found;
+@@ -344,6 +350,26 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+     default:
+         return std::nullopt;
+     case IR::Opcode::BitwiseOr32: {
++        if ((Settings::values.debug_knobs.GetValue() & 8U) != 0) {
++            for (size_t arg = 0; arg < 2; ++arg) {
++                if (!inst->Arg(arg).IsImmediate()) {
++                    continue;
++                }
++                const u32 mask = inst->Arg(arg).U32();
++                if (mask == 0 || (mask & 0xFFFFFU) != 0) {
++                    continue;
++                }
++                auto source = TrackCached(inst->Arg(1 - arg), env, host_info);
++                if (source) {
++                    const u32 original = GetTextureHandleCached(env, *source);
++                    source->constant_mask |= mask;
++                    LOG_WARNING(Shader,
++                                "Texture mask experiment: cbuf {} offset {} handle {:08x} -> {:08x}",
++                                source->index, source->offset, original, original | mask);
++                    return source;
++                }
++            }
++        }
+         std::optional lhs{TrackCached(inst->Arg(0), env, host_info)};
+         std::optional rhs{TrackCached(inst->Arg(1), env, host_info)};
+         if (!lhs || !rhs) {
+@@ -368,6 +394,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+             .dynamic_offset = {},
+             .count = 1,
+             .has_secondary = true,
++            .constant_mask = lhs->constant_mask | rhs->constant_mask,
+         };
+     }
+     case IR::Opcode::ShiftLeftLogical32: {
+@@ -378,6 +405,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+         std::optional lhs{TrackCached(inst->Arg(0), env, host_info)};
+         if (lhs) {
+             lhs->shift_left = shift.U32();
++            lhs->constant_mask = shift.U32() < 32 ? lhs->constant_mask << shift.U32() : 0;
+         }
+         return lhs;
+     }
+@@ -406,6 +434,7 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
+         std::optional lhs{TrackCached(op1, env, host_info)};
+         if (lhs) {
+             lhs->shift_left = static_cast<u32>(std::countr_zero(op2.U32()));
++            lhs->constant_mask &= op2.U32();
+         }
+         return lhs;
+         break;
+@@ -502,7 +531,7 @@ u32 GetTextureHandle(Environment& env, const ConstBufferAddr& cbuf) {
+     const u32 lhs_raw{env.ReadCbufValue(cbuf.index, cbuf.offset) << cbuf.shift_left};
+     const u32 rhs_raw{env.ReadCbufValue(secondary_index, secondary_offset)
+                       << cbuf.secondary_shift_left};
+-    return lhs_raw | rhs_raw;
++    return lhs_raw | rhs_raw | cbuf.constant_mask;
+ }
+ 
+ [[maybe_unused]] TextureType ReadTextureType(Environment& env, const ConstBufferAddr& cbuf) {
+@@ -536,7 +565,8 @@ public:
+                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
+                    desc.secondary_shift_left == existing.secondary_shift_left &&
+                    desc.count == existing.count && desc.size_shift == existing.size_shift &&
+-                   desc.has_secondary == existing.has_secondary;
++                   desc.has_secondary == existing.has_secondary &&
++                   desc.constant_mask == existing.constant_mask;
+         });
+     }
+ 
+@@ -544,7 +574,8 @@ public:
+         const u32 index{Add(image_buffer_descriptors, desc, [&desc](const auto& existing) {
+             return desc.format == existing.format && desc.cbuf_index == existing.cbuf_index &&
+                    desc.cbuf_offset == existing.cbuf_offset && desc.count == existing.count &&
+-                   desc.size_shift == existing.size_shift;
++                   desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         image_buffer_descriptors[index].is_written |= desc.is_written;
+         image_buffer_descriptors[index].is_read |= desc.is_read;
+@@ -562,7 +593,8 @@ public:
+                    desc.secondary_cbuf_index == existing.secondary_cbuf_index &&
+                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
+                    desc.secondary_shift_left == existing.secondary_shift_left &&
+-                   desc.count == existing.count && desc.size_shift == existing.size_shift;
++                   desc.count == existing.count && desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         // TODO: Read this from TIC
+         texture_descriptors[index].is_multisample |= desc.is_multisample;
+@@ -575,7 +607,8 @@ public:
+             return desc.type == existing.type && desc.format == existing.format &&
+                    desc.cbuf_index == existing.cbuf_index &&
+                    desc.cbuf_offset == existing.cbuf_offset && desc.count == existing.count &&
+-                   desc.size_shift == existing.size_shift;
++                   desc.size_shift == existing.size_shift &&
++                   desc.constant_mask == existing.constant_mask;
+         })};
+         image_descriptors[index].is_written |= desc.is_written;
+         image_descriptors[index].is_read |= desc.is_read;
+@@ -669,6 +702,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+     env.cbuf_word_cache.clear();
+     env.handle_cache.clear();
+     env.track_cache.clear();
++    env.track_in_progress.clear();
+     TextureInstVector to_replace;
+     for (IR::Block* const block : program.post_order_blocks) {
+         for (IR::Inst& inst : block->Instructions()) {
+@@ -780,6 +814,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .cbuf_offset = cbuf.offset,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             } else {
+                 index = descriptors.Add(ImageDescriptor{
+@@ -792,6 +827,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .cbuf_offset = cbuf.offset,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             }
+             break;
+@@ -808,6 +844,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .secondary_shift_left = cbuf.secondary_shift_left,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+             } else {
+                 count = std::min(count, sampled_dynamic_cap);
+@@ -826,6 +863,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
+                     .secondary_shift_left = cbuf.secondary_shift_left,
+                     .count = count,
+                     .size_shift = size_shift,
++                    .constant_mask = cbuf.constant_mask,
+                 });
+                 flags.is_integer.Assign(is_integer ? 1 : 0);
+             }
+diff --git a/src/shader_recompiler/shader_info.h b/src/shader_recompiler/shader_info.h
+index 71309e0..34eccaa 100644
+--- a/src/shader_recompiler/shader_info.h
++++ b/src/shader_recompiler/shader_info.h
+@@ -186,6 +186,7 @@ struct TextureBufferDescriptor {
+     u32 secondary_shift_left;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const TextureBufferDescriptor&) const = default;
+ };
+@@ -200,6 +201,7 @@ struct ImageBufferDescriptor {
+     u32 cbuf_offset;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const ImageBufferDescriptor&) const = default;
+ };
+@@ -219,6 +221,7 @@ struct TextureDescriptor {
+     u32 secondary_shift_left;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const TextureDescriptor&) const = default;
+ };
+@@ -234,6 +237,7 @@ struct ImageDescriptor {
+     u32 cbuf_offset;
+     u32 count;
+     u32 size_shift;
++    u32 constant_mask{};
+ 
+     auto operator<=>(const ImageDescriptor&) const = default;
+ };
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index 53addb5..20bd862 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <memory>
+ #include <numeric>
+ 
+@@ -183,7 +184,22 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+ template <class P>
+ void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
+     ForEachBufferInRange(device_addr, size, [&](BufferId, Buffer& buffer) {
+-        DownloadBufferMemory(buffer, device_addr, size);
++        const bool prefetch_parameters = !Settings::IsGPULevelHigh() && size == 5 * sizeof(u32) &&
++            (Settings::values.debug_knobs.GetValue() & (4096U | 8192U)) == (4096U | 8192U);
++        if (prefetch_parameters) {
++            constexpr u64 window = 64 * 1024;
++            const DAddr start = std::max(buffer.CpuAddr(), Common::AlignDown(device_addr, window));
++            const DAddr end = std::min(buffer.CpuAddr() + buffer.SizeBytes(),
++                                      Common::AlignUp(device_addr + size, window));
++            static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++            if (!logged.test_and_set(std::memory_order_relaxed)) {
++                LOG_WARNING(HW_GPU, "Parameter prefetch experiment: downloading nearby modified "
++                                    "buffer data in a {} byte window", end - start);
++            }
++            DownloadBufferMemory(buffer, start, end - start);
++        } else {
++            DownloadBufferMemory(buffer, device_addr, size);
++        }
+     });
+ }
+ 
+@@ -702,6 +718,24 @@ void BufferCache<P>::PopAsyncBuffers() {
+         });
+         async_downloads.Subtract(device_addr, copy.size, [&](DAddr start, DAddr end) {
+             gpu_modified_ranges.Subtract(start, end - start);
++            if ((Settings::values.debug_knobs.GetValue() & 1024U) != 0) {
++                const auto preserve_pending = [this](DAddr pending_start, DAddr pending_end) {
++                    if (pending_start >= pending_end) {
++                        return;
++                    }
++                    gpu_modified_ranges.Add(pending_start, pending_end - pending_start);
++                    static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++                    if (!logged.test_and_set(std::memory_order_relaxed)) {
++                        LOG_WARNING(HW_GPU, "Pending writes experiment: preserving a newer GPU "
++                                            "write while retiring an older readback");
++                    }
++                };
++                uncommitted_gpu_modified_ranges.ForEachInRange(start, end - start,
++                                                               preserve_pending);
++                for (const auto& pending : committed_gpu_modified_ranges) {
++                    pending.ForEachInRange(start, end - start, preserve_pending);
++                }
++            }
+         });
+     }
+     async_buffers_death_ring.emplace_back(*async_buffer);
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index 2c0ba00..e3997c2 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -4,6 +4,11 @@
+ // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
++#include <chrono>
++#include <fstream>
++
++#include "common/fs/path_util.h"
+ #include "common/settings.h"
+ #include "core/core.h"
+ #include "video_core/dma_pusher.h"
+@@ -18,6 +23,34 @@ namespace Tegra {
+ constexpr u32 MacroRegistersStart = 0xE00;
+ constexpr u32 ComputeInline = 0x6D;
+ 
++namespace {
++
++bool IsLiveParameterSyncEnabled() {
++    static bool enabled = true;
++    static bool logged = false;
++    static auto next_poll = std::chrono::steady_clock::time_point{};
++    const auto now = std::chrono::steady_clock::now();
++    if (now < next_poll) {
++        return enabled;
++    }
++    next_poll = now + std::chrono::seconds{1};
++    std::ifstream control{Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) /
++                          "mh-rise-sync-control.txt"};
++    char mode{};
++    if (control.get(mode) && (mode == '0' || mode == '1')) {
++        const bool requested = mode == '1';
++        if (!logged || requested != enabled) {
++            LOG_WARNING(HW_GPU, "Live comparison: selective parameter readback enabled {}",
++                        requested);
++            logged = true;
++        }
++        enabled = requested;
++    }
++    return enabled;
++}
++
++} // namespace
++
+ DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
+     : system{system_}
+     , memory_manager{memory_manager_}
+@@ -84,7 +117,81 @@ bool DmaPusher::Step() {
+             }
+         }
+         const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe();
+-        if (use_safe) {
++        const bool test_indexed_payload_sync = !Settings::IsGPULevelHigh() &&
++            (Settings::values.debug_knobs.GetValue() & 4096U) != 0 &&
++            subchannels[dma_state.subchannel] &&
++            subchannel_type[dma_state.subchannel] == Engines::EngineTypes::Maxwell3D &&
++            dma_state.method >= MacroRegistersStart && dma_state.non_incrementing &&
++            dma_state.method_count == 5 && header.size == 5 &&
++            ((Settings::values.debug_knobs.GetValue() & 32768U) == 0 ||
++             IsLiveParameterSyncEnabled());
++        const bool test_command_sync = !Settings::IsGPULevelHigh() &&
++            ((Settings::values.debug_knobs.GetValue() & (64U | 128U | 256U)) != 0 ||
++             test_indexed_payload_sync);
++        if (test_command_sync) {
++            const u32 knobs = Settings::values.debug_knobs.GetValue();
++            const bool trace_readback = (knobs & 512U) != 0;
++            std::array<u32, 16> before{};
++            const size_t trace_words = std::min<size_t>(before.size(), header.size);
++            if (trace_readback) {
++                memory_manager.ReadBlockUnsafe(dma_state.dma_get, before.data(),
++                                               trace_words * sizeof(u32));
++            }
++            const auto caches = (knobs & 64U) != 0
++                                    ? VideoCommon::CacheType::NoTextureCache
++                                    : (knobs & 128U) != 0
++                                          ? VideoCommon::CacheType::QueryCache
++                                          : VideoCommon::CacheType::BufferCache;
++            static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++            if (!logged.test_and_set(std::memory_order_relaxed)) {
++                LOG_WARNING(HW_GPU, "DMA experiment: synchronizing command cache mask {} "
++                                    "at low GPU accuracy, five-word payload only {}, method {:x}",
++                            static_cast<u32>(caches), test_indexed_payload_sync, dma_state.method);
++            }
++            memory_manager.FlushRegion(dma_state.dma_get,
++                                       static_cast<size_t>(header.size) * sizeof(CommandHeader),
++                                       caches);
++            Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader,
++                                         Tegra::Memory::GuestMemoryFlags::UnsafeRead>
++                headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
++            if (test_indexed_payload_sync && (knobs & 16384U) != 0) {
++                auto* engine = subchannels[dma_state.subchannel];
++                if (engine->current_dirty) {
++                    static std::atomic_flag logged_refreshed = ATOMIC_FLAG_INIT;
++                    if (!logged_refreshed.test_and_set(std::memory_order_relaxed)) {
++                        LOG_WARNING(HW_GPU, "Refreshed parameter experiment: clearing the GPU "
++                                            "dirty marker after downloading the full payload");
++                    }
++                }
++                engine->current_dirty = false;
++            }
++            if (trace_readback) {
++                static auto last_trace = std::chrono::steady_clock::time_point::min();
++                static u32 trace_count = 0;
++                const auto now = std::chrono::steady_clock::now();
++                const bool changed = !std::equal(before.begin(), before.begin() + trace_words,
++                                                headers.begin(), [](u32 a, const CommandHeader& b) {
++                                                    return a == b.argument;
++                                                });
++                if (changed && trace_count < 512 &&
++                    (trace_count == 0 || now - last_trace >= std::chrono::seconds{1})) {
++                    last_trace = now;
++                    ++trace_count;
++                    LOG_WARNING(HW_GPU, "DMA readback {}: words {} method {:x} remaining {} "
++                                        "subchannel {} prefix {:08x} {:08x} {:08x} {:08x}",
++                                trace_count, header.size.Value(), dma_state.method,
++                                dma_state.method_count, dma_state.subchannel, before[0], before[1],
++                                before[2], before[3]);
++                    for (size_t index = 0; index < trace_words; ++index) {
++                        if (before[index] != headers[index].argument) {
++                            LOG_WARNING(HW_GPU, "DMA readback {} word {}: {:08x} -> {:08x}",
++                                        trace_count, index, before[index], headers[index].argument);
++                        }
++                    }
++                }
++            }
++            ProcessCommands(headers);
++        } else if (use_safe) {
+             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+             ProcessCommands(headers);
+         } else {
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index e7da9d9..5c68ccd 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -4,6 +4,8 @@
+ // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
++#include <chrono>
+ #include <cstring>
+ #include <optional>
+ #include "common/assert.h"
+@@ -223,9 +225,18 @@ void Maxwell3D::ProcessMacro(Core::System& system, u32 method, const u32* base_s
+ }
+ 
+ void Maxwell3D::RefreshParametersImpl() {
+-    if (!Settings::IsGPULevelHigh()) {
++    const bool high_accuracy = Settings::IsGPULevelHigh();
++    const bool test_macro_refresh = (Settings::values.debug_knobs.GetValue() & 32U) != 0;
++    if (!high_accuracy && !test_macro_refresh) {
+         return;
+     }
++    if (!high_accuracy) {
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Macro refresh experiment: refreshing GPU-written parameters "
++                                "with low GPU accuracy");
++        }
++    }
+     size_t current_index = 0;
+     for (auto& segment : macro_segments) {
+         if (segment.first == 0) {
+@@ -379,6 +390,38 @@ void Maxwell3D::CallMacroMethod(Core::System& system, u32 method, const std::vec
+     // Lookup the macro offset
+     const u32 entry =
+         ((method - MacroRegistersStart) >> 1) % static_cast<u32>(macro_positions.size());
++    if ((Settings::values.debug_knobs.GetValue() & 512U) != 0) {
++        static std::array<std::chrono::steady_clock::time_point, 128> next_log{};
++        static std::array<u32, 128> log_counts{};
++        const auto now = std::chrono::steady_clock::now();
++        if (entry < next_log.size() && log_counts[entry] < 128 && now >= next_log[entry]) {
++            next_log[entry] = now + std::chrono::seconds{4};
++            ++log_counts[entry];
++            bool gpu_dirty = false;
++            for (const auto& [address, count] : macro_segments) {
++                if (address != 0) {
++                    gpu_dirty |= memory_manager.IsMemoryDirty(address, count * sizeof(u32));
++                }
++            }
++            LOG_WARNING(HW_GPU, "Macro parameter diagnostic: method {:x} tracked {} "
++                                "current GPU dirty {} segments {} words {}",
++                        method, current_macro_dirty, gpu_dirty, macro_segments.size(),
++                        parameters.size());
++        }
++    }
++    if ((Settings::values.debug_knobs.GetValue() & 512U) != 0 && current_macro_dirty) {
++        static std::bitset<128> logged_entries;
++        if (entry < logged_entries.size() && !logged_entries.test(entry)) {
++            logged_entries.set(entry);
++            LOG_WARNING(HW_GPU, "Dirty macro: method {:x} code {:x} words {} "
++                                "prefix {:08x} {:08x} {:08x} {:08x}",
++                        method, macro_positions[entry], parameters.size(),
++                        parameters.empty() ? 0U : parameters[0],
++                        parameters.size() > 1 ? parameters[1] : 0U,
++                        parameters.size() > 2 ? parameters[2] : 0U,
++                        parameters.size() > 3 ? parameters[3] : 0U);
++        }
++    }
+ 
+     // Execute the current macro.
+     macro_engine.Execute(system, *this, macro_positions[entry], parameters);
+diff --git a/src/video_core/macro.cpp b/src/video_core/macro.cpp
+index 86f528a..189dafc 100644
+--- a/src/video_core/macro.cpp
++++ b/src/video_core/macro.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <cstring>
++#include <chrono>
+ #include <fstream>
+ #include <optional>
+ #include <span>
+@@ -125,6 +126,26 @@ void HLE_DrawArraysIndirect::Fallback(Core::System& system, Engines::Maxwell3D&
+ 
+ void HLE_DrawIndexedIndirect::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, [[maybe_unused]] u32 method) {
+     auto topology = static_cast<Maxwell3D::Regs::PrimitiveTopology>(parameters[0]);
++    if ((Settings::values.debug_knobs.GetValue() & 512U) != 0) {
++        static std::array<u64, 4> counts{};
++        static auto next_log = std::chrono::steady_clock::time_point{};
++        static u32 log_count = 0;
++        const bool dirty = maxwell3d.AnyParametersDirty();
++        const bool zero_instances = (maxwell3d.GetRegisterValue(0xD1B) & parameters[2]) == 0;
++        ++counts[(dirty ? 2 : 0) + (zero_instances ? 1 : 0)];
++        const auto now = std::chrono::steady_clock::now();
++        if (log_count < 256 && now >= next_log) {
++            next_log = now + std::chrono::seconds{2};
++            ++log_count;
++            LOG_WARNING(HW_GPU, "Indexed parameter diagnostic {}: clean nonzero {} zero {} "
++                                "dirty nonzero {} zero {} estimate {} address {:x} "
++                                "words {} {} {} {} {}",
++                        log_count, counts[0], counts[1], counts[2], counts[3],
++                        maxwell3d.EstimateIndexBufferSize(), maxwell3d.GetMacroAddress(1),
++                        parameters[1], parameters[2], parameters[3], parameters[4], parameters[5]);
++            counts.fill(0);
++        }
++    }
+     if (!maxwell3d.AnyParametersDirty() || !IsTopologySafe(topology)) {
+         Fallback(system, maxwell3d, parameters);
+         return;
+@@ -1420,6 +1441,11 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
+         ci.program = Compile(system, maxwell3d, code);
+     }
+ 
++    if ((Settings::values.debug_knobs.GetValue() & 512U) != 0) {
++        LOG_WARNING(HW_GPU, "Macro mapping: code {:x} hash {:016x} variant {}", method,
++                    ci.hash, ci.program.index());
++    }
++
+     execute_variant(ci.program);
+     if (Settings::values.dump_macros) {
+         Dump(ci.hash, code, !std::holds_alternative<std::monostate>(ci.program));
+diff --git a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+index f0a7baf..9b56641 100644
+--- a/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_compute_pipeline.cpp
+@@ -119,10 +119,10 @@ void ComputePipeline::Configure() {
+                 const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                 const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                   << desc.secondary_shift_left};
+-                return TexturePair(lhs_raw | rhs_raw, via_header_index);
++                return TexturePair(lhs_raw | rhs_raw | desc.constant_mask, via_header_index);
+             }
+         }
+-        return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++        return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+     }};
+     const auto add_image{[&](const auto& desc, bool blacklist) {
+         for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+index 8354546..9152213 100644
+--- a/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
++++ b/src/video_core/renderer_opengl/gl_graphics_pipeline.cpp
+@@ -320,11 +320,11 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                     const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                     const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                       << desc.secondary_shift_left};
+-                    const u32 raw{lhs_raw | rhs_raw};
++                    const u32 raw{lhs_raw | rhs_raw | desc.constant_mask};
+                     return TexturePair(raw, via_header_index);
+                 }
+             }
+-            return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++            return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+         }};
+         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
+             for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+index 29356cf..46122e1 100644
+--- a/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
+@@ -185,10 +185,10 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
+                                              secondary_offset};
+                 const u32 lhs_raw{gpu_memory.Read<u32>(addr) << desc.shift_left};
+                 const u32 rhs_raw{gpu_memory.Read<u32>(separate_addr) << desc.secondary_shift_left};
+-                return TexturePair(lhs_raw | rhs_raw, via_header_index);
++                return TexturePair(lhs_raw | rhs_raw | desc.constant_mask, via_header_index);
+             }
+         }
+-        return TexturePair(gpu_memory.Read<u32>(addr), via_header_index);
++        return TexturePair(gpu_memory.Read<u32>(addr) | desc.constant_mask, via_header_index);
+     }};
+     const auto add_image{[&](const auto& desc, bool blacklist) {
+         for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 8b5b0bc..9ecc105 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstring>
+ #include <iostream>
+ #include <span>
+@@ -379,6 +380,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+             const u32 index_offset{index << desc.size_shift};
+             const u32 offset{desc.cbuf_offset + index_offset};
+             const GPUVAddr addr{cbufs[desc.cbuf_index].address + offset};
++            if (desc.constant_mask != 0) {
++                static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++                if (!logged.test_and_set(std::memory_order_relaxed)) {
++                    LOG_WARNING(Render_Vulkan,
++                                "Texture mask binding: mask {:08x}, header index {}",
++                                desc.constant_mask, via_header_index);
++                }
++            }
+             if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&> ||
+                           std::is_same_v<decltype(desc), const Shader::TextureBufferDescriptor&>) {
+                 if (desc.has_secondary) {
+@@ -389,11 +398,11 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+                     const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                     const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
+                                       << desc.secondary_shift_left};
+-                    const u32 raw{lhs_raw | rhs_raw};
++                    const u32 raw{lhs_raw | rhs_raw | desc.constant_mask};
+                     return TexturePair(raw, via_header_index);
+                 }
+             }
+-            return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
++            return TexturePair(gpu_memory->Read<u32>(addr) | desc.constant_mask, via_header_index);
+         }};
+         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
+             for (u32 index = 0; index < desc.count; ++index) {
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index a85e281..18d4bd3 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -15,12 +15,14 @@
+ #include <bit>
+ #include <numeric>
+ #include "common/cityhash.h"
++#include "common/fs/file.h"
+ #include "common/fs/fs.h"
+ #include "common/fs/path_util.h"
+ #include "common/thread_worker.h"
+ #include "core/core.h"
+ #include "shader_recompiler/backend/spirv/emit_spirv.h"
+ #include "shader_recompiler/environment.h"
++#include "shader_recompiler/frontend/ir/program.h"
+ #include "shader_recompiler/frontend/maxwell/control_flow.h"
+ #include "shader_recompiler/frontend/maxwell/translate_program.h"
+ #include "shader_recompiler/ir_opt/passes.h"
+@@ -63,6 +65,16 @@ using VideoCommon::FileEnvironment;
+ using VideoCommon::GenericEnvironment;
+ using VideoCommon::GraphicsEnvironment;
+ 
++void DumpShaderIR(u64 shader_hash, const Shader::IR::Program& program) {
++    const auto& dump_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir);
++    const auto path = dump_dir / fmt::format("{:016x}_{:016x}.ir",
++                                           Settings::GetCurrentProgramID(), shader_hash);
++    const std::string text = Shader::IR::DumpProgram(program);
++    if (Common::FS::WriteStringToFile(path, Common::FS::FileType::TextFile, text) != text.size()) {
++        LOG_WARNING(Render_Vulkan, "Failed to dump shader IR {:016x}", shader_hash);
++    }
++}
++
+ constexpr u32 CACHE_VERSION = 18;
+ constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
+ constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
+@@ -480,7 +492,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+         .max_descriptor_set_storage_images = device.GetMaxDescriptorSetStorageImages(),
+         .max_descriptor_set_input_attachements = device.GetMaxDescriptorSetInputAttachments(),
+         .support_float64 = device.IsFloat64Supported(),
+-        .support_float16 = device.IsFloat16Supported(),
++        .support_float16 = device.IsFloat16Supported() &&
++                           (Settings::values.debug_knobs.GetValue() & 2U) == 0,
+         .support_int64 = device.IsShaderInt64Supported(),
+         .needs_demote_reorder = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                 driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+@@ -493,6 +506,9 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+         .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
+     };
+     host_info.ApplyDescriptorLimitPolicy();
++    if ((Settings::values.debug_knobs.GetValue() & 2U) != 0) {
++        LOG_WARNING(Render_Vulkan, "FP32 experiment: lowering guest FP16 arithmetic");
++    }
+ 
+     if (device.GetMaxVertexInputAttributes() < Maxwell::NumVertexAttributes) {
+         LOG_WARNING(Render_Vulkan, "maxVertexInputAttributes is too low: {} < {}",
+@@ -830,11 +846,13 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+         Shader::Maxwell::Flow::CFG cfg(env, pools.flow_block, cfg_offset, index == 0);
+         if (!uses_vertex_a || index != 1) {
+             // Normal path
+-            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
++            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info,
++                                               key.unique_hashes[index]);
+         } else {
+             // VertexB path when VertexA is present.
+             auto& program_va{programs[0]};
+-            auto program_vb{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
++            auto program_vb{TranslateProgram(pools.inst, pools.block, env, cfg, host_info,
++                                             key.unique_hashes[index])};
+             programs[index] = MergeDualVertexPrograms(program_va, program_vb, env);
+         }
+ 
+@@ -890,6 +908,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+             if (should_dump) {
+                 GPU::Logging::DumpSpirvShader(key.unique_hashes[index],
+                                               std::span<const u32>(code.data(), code.size()));
++                DumpShaderIR(key.unique_hashes[index], program);
+             }
+         }
+ 
+@@ -985,7 +1004,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
+         env.Dump(hash, key.unique_hash);
+     }
+ 
+-    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
++    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info, key.unique_hash)};
+     const VkDriverIdKHR driver_id = device.GetDriverID();
+     const bool needs_shared_mem_clamp =
+         driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
+@@ -1016,6 +1035,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
+         if (should_dump) {
+             GPU::Logging::DumpSpirvShader(key.unique_hash,
+                                           std::span<const u32>(code.data(), code.size()));
++            DumpShaderIR(key.unique_hash, program);
+         }
+     }
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index f43bea1..390dd51 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <memory>
+ #include <mutex>
+ 
+@@ -583,6 +584,26 @@ void RasterizerVulkan::Clear(u32 layer_count) {
+ }
+ 
+ void RasterizerVulkan::DispatchCompute() {
++    const auto synchronize_compute_output = [this] {
++        if ((Settings::values.debug_knobs.GetValue() & 2048U) == 0) {
++            return;
++        }
++        static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++        if (!logged.test_and_set(std::memory_order_relaxed)) {
++            LOG_WARNING(HW_GPU, "Compute visibility experiment: making shader writes visible "
++                                "to following GPU commands without CPU readback");
++        }
++        scheduler.Record([](vk::CommandBuffer cmdbuf) {
++            static constexpr VkMemoryBarrier barrier{
++                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
++                .pNext = nullptr,
++                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
++                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
++            };
++            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
++                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier);
++        });
++    };
+     FlushWork();
+     gpu_memory->FlushCaching();
+ 
+@@ -612,6 +633,7 @@ void RasterizerVulkan::DispatchCompute() {
+             }
+             cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
+         });
++        synchronize_compute_output();
+         return;
+     }
+     const std::array<u32, 3> dim{qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z};
+@@ -634,6 +656,7 @@ void RasterizerVulkan::DispatchCompute() {
+         }
+         cmdbuf.Dispatch(dim[0], dim[1], dim[2]);
+     });
++    synchronize_compute_output();
+ 
+     // Log compute dispatch
+     if (GPU::Logging::IsActive() &&
+diff --git a/src/video_core/shader_environment.cpp b/src/video_core/shader_environment.cpp
+index 4d5db7e..e211ca1 100644
+--- a/src/video_core/shader_environment.cpp
++++ b/src/video_core/shader_environment.cpp
+@@ -284,6 +284,28 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
+ Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
+                                                              bool via_header_index, u32 raw) {
+     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
++    if (handle.first > tic_limit) {
++        const size_t cached_size{std::min(static_cast<size_t>(cached_highest - cached_lowest),
++                                          code.size() * sizeof(u64))};
++        const size_t hash_size{cached_size >= INST_SIZE ? cached_size - INST_SIZE : cached_size};
++        const u64 shader_hash{Common::CityHash64(reinterpret_cast<const char*>(code.data()),
++                                                hash_size)};
++        LOG_ERROR(Render, "Invalid texture header: shader candidate {:016x}, stage {}, raw {:08x}, "
++                          "texture {}, sampler {}, limit {}, via header {}",
++                  shader_hash, static_cast<u32>(stage), raw, handle.first, handle.second,
++                  tic_limit, via_header_index);
++        if ((Settings::values.debug_knobs.GetValue() & 16U) != 0) {
++            Tegra::Texture::TICEntry null_entry{};
++            null_entry.texture_type.Assign(Tegra::Texture::TextureType::Texture2D);
++            null_entry.normalized_coords.Assign(1);
++            null_entry.format.Assign(Tegra::Texture::TextureFormat::A8B8G8R8);
++            null_entry.r_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.g_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.b_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            null_entry.a_type.Assign(Tegra::Texture::ComponentType::UNORM);
++            return null_entry;
++        }
++    }
+     ASSERT(handle.first <= tic_limit);
+     const GPUVAddr descriptor_addr{tic_addr + handle.first * sizeof(Tegra::Texture::TICEntry)};
+     Tegra::Texture::TICEntry entry;
+diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
+index be09bca..6d487b4 100644
+--- a/src/video_core/vulkan_common/vulkan_device.cpp
++++ b/src/video_core/vulkan_common/vulkan_device.cpp
+@@ -732,6 +732,11 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+                                VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+     }
+ 
++    if ((Settings::values.debug_knobs.GetValue() & 4U) != 0) {
++        features.features.textureCompressionBC = false;
++        LOG_WARNING(Render_Vulkan, "BCn experiment: using converted textures instead of native BCn");
++    }
++
+     logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+ 
+     graphics_queue = logical.GetQueue(graphics_family);

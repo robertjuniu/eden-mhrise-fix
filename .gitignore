@@ -1,0 +1,8 @@
+*.apk
+*.xci
+*.nsp
+*.keys
+*.keystore
+*.perf.data
+local.properties
+.env

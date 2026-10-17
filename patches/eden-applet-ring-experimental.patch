@@ -1,0 +1,18 @@
+diff --git a/src/video_core/renderer_vulkan/renderer_vulkan.cpp b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
+index 27ca531..2639627 100644
+--- a/src/video_core/renderer_vulkan/renderer_vulkan.cpp
++++ b/src/video_core/renderer_vulkan/renderer_vulkan.cpp
+@@ -358,7 +358,12 @@ void RendererVulkan::RenderAppletCaptureLayer(
+     }
+ 
+     scheduler.RequestOutsideRenderPassOperationContext();
+-    blit_applet.DrawToFrame(device, rasterizer, &applet_frame, capture_layers, VideoCore::Capture::Layout, 1,
++    static bool logged_capture_ring = false;
++    if (!logged_capture_ring) {
++        LOG_WARNING(Render_Vulkan, "Applet capture experiment: rotating three resource sets");
++        logged_capture_ring = true;
++    }
++    blit_applet.DrawToFrame(device, rasterizer, &applet_frame, capture_layers, VideoCore::Capture::Layout, 3,
+                             CaptureFormat);
+ }
+ 

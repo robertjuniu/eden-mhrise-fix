@@ -1,0 +1,134 @@
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index 2c0ba00..e3997c2 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -4,6 +4,11 @@
+ // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
++#include <chrono>
++#include <fstream>
++
++#include "common/fs/path_util.h"
+ #include "common/settings.h"
+ #include "core/core.h"
+ #include "video_core/dma_pusher.h"
+@@ -18,6 +23,34 @@ namespace Tegra {
+ constexpr u32 MacroRegistersStart = 0xE00;
+ constexpr u32 ComputeInline = 0x6D;
+ 
++namespace {
++
++bool IsLiveParameterSyncEnabled() {
++    static bool enabled = true;
++    static bool logged = false;
++    static auto next_poll = std::chrono::steady_clock::time_point{};
++    const auto now = std::chrono::steady_clock::now();
++    if (now < next_poll) {
++        return enabled;
++    }
++    next_poll = now + std::chrono::seconds{1};
++    std::ifstream control{Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) /
++                          "mh-rise-sync-control.txt"};
++    char mode{};
++    if (control.get(mode) && (mode == '0' || mode == '1')) {
++        const bool requested = mode == '1';
++        if (!logged || requested != enabled) {
++            LOG_WARNING(HW_GPU, "Live comparison: selective parameter readback enabled {}",
++                        requested);
++            logged = true;
++        }
++        enabled = requested;
++    }
++    return enabled;
++}
++
++} // namespace
++
+ DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
+     : system{system_}
+     , memory_manager{memory_manager_}
+@@ -84,7 +117,81 @@ bool DmaPusher::Step() {
+             }
+         }
+         const bool use_safe = Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe();
+-        if (use_safe) {
++        const bool test_indexed_payload_sync = !Settings::IsGPULevelHigh() &&
++            (Settings::values.debug_knobs.GetValue() & 4096U) != 0 &&
++            subchannels[dma_state.subchannel] &&
++            subchannel_type[dma_state.subchannel] == Engines::EngineTypes::Maxwell3D &&
++            dma_state.method >= MacroRegistersStart && dma_state.non_incrementing &&
++            dma_state.method_count == 5 && header.size == 5 &&
++            ((Settings::values.debug_knobs.GetValue() & 32768U) == 0 ||
++             IsLiveParameterSyncEnabled());
++        const bool test_command_sync = !Settings::IsGPULevelHigh() &&
++            ((Settings::values.debug_knobs.GetValue() & (64U | 128U | 256U)) != 0 ||
++             test_indexed_payload_sync);
++        if (test_command_sync) {
++            const u32 knobs = Settings::values.debug_knobs.GetValue();
++            const bool trace_readback = (knobs & 512U) != 0;
++            std::array<u32, 16> before{};
++            const size_t trace_words = std::min<size_t>(before.size(), header.size);
++            if (trace_readback) {
++                memory_manager.ReadBlockUnsafe(dma_state.dma_get, before.data(),
++                                               trace_words * sizeof(u32));
++            }
++            const auto caches = (knobs & 64U) != 0
++                                    ? VideoCommon::CacheType::NoTextureCache
++                                    : (knobs & 128U) != 0
++                                          ? VideoCommon::CacheType::QueryCache
++                                          : VideoCommon::CacheType::BufferCache;
++            static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++            if (!logged.test_and_set(std::memory_order_relaxed)) {
++                LOG_WARNING(HW_GPU, "DMA experiment: synchronizing command cache mask {} "
++                                    "at low GPU accuracy, five-word payload only {}, method {:x}",
++                            static_cast<u32>(caches), test_indexed_payload_sync, dma_state.method);
++            }
++            memory_manager.FlushRegion(dma_state.dma_get,
++                                       static_cast<size_t>(header.size) * sizeof(CommandHeader),
++                                       caches);
++            Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader,
++                                         Tegra::Memory::GuestMemoryFlags::UnsafeRead>
++                headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
++            if (test_indexed_payload_sync && (knobs & 16384U) != 0) {
++                auto* engine = subchannels[dma_state.subchannel];
++                if (engine->current_dirty) {
++                    static std::atomic_flag logged_refreshed = ATOMIC_FLAG_INIT;
++                    if (!logged_refreshed.test_and_set(std::memory_order_relaxed)) {
++                        LOG_WARNING(HW_GPU, "Refreshed parameter experiment: clearing the GPU "
++                                            "dirty marker after downloading the full payload");
++                    }
++                }
++                engine->current_dirty = false;
++            }
++            if (trace_readback) {
++                static auto last_trace = std::chrono::steady_clock::time_point::min();
++                static u32 trace_count = 0;
++                const auto now = std::chrono::steady_clock::now();
++                const bool changed = !std::equal(before.begin(), before.begin() + trace_words,
++                                                headers.begin(), [](u32 a, const CommandHeader& b) {
++                                                    return a == b.argument;
++                                                });
++                if (changed && trace_count < 512 &&
++                    (trace_count == 0 || now - last_trace >= std::chrono::seconds{1})) {
++                    last_trace = now;
++                    ++trace_count;
++                    LOG_WARNING(HW_GPU, "DMA readback {}: words {} method {:x} remaining {} "
++                                        "subchannel {} prefix {:08x} {:08x} {:08x} {:08x}",
++                                trace_count, header.size.Value(), dma_state.method,
++                                dma_state.method_count, dma_state.subchannel, before[0], before[1],
++                                before[2], before[3]);
++                    for (size_t index = 0; index < trace_words; ++index) {
++                        if (before[index] != headers[index].argument) {
++                            LOG_WARNING(HW_GPU, "DMA readback {} word {}: {:08x} -> {:08x}",
++                                        trace_count, index, before[index], headers[index].argument);
++                        }
++                    }
++                }
++            }
++            ProcessCommands(headers);
++        } else if (use_safe) {
+             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+             ProcessCommands(headers);
+         } else {
